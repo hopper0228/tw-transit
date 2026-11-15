@@ -191,7 +191,21 @@ function getLineHeadwayMins(
   const lineFreqs = freqList.filter(
     (f) => f.LineID === lineCode || f.LineNo === lineCode
   );
-  if (lineFreqs.length === 0) return null;
+  if (lineFreqs.length === 0) {
+    // 若 TDX Frequency 因 429 暫未取得，文湖線 (BR) 於營運時段 06:00–24:00 使用官方公告班距作為備援
+    if (lineCode === 'BR') {
+      const adjNow = minutesOfDay < 180 ? minutesOfDay + 1440 : minutesOfDay;
+      if (adjNow >= 360 && adjNow <= 1440) {
+        if (adjNow >= 1380) return { minMins: 12, maxMins: 12 };
+        const isWeekday = weekday !== 'Saturday' && weekday !== 'Sunday';
+        const isPeak =
+          isWeekday &&
+          ((adjNow >= 420 && adjNow <= 540) || (adjNow >= 1020 && adjNow <= 1170));
+        return isPeak ? { minMins: 2, maxMins: 4 } : { minMins: 4, maxMins: 10 };
+      }
+    }
+    return null;
+  }
 
   const todayFreqs = lineFreqs.filter(
     (f) => !f.ServiceDay || f.ServiceDay[weekday] === true
