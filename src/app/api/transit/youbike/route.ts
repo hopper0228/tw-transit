@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { MOCK_YOUBIKE_STATIONS } from '@/lib/mock-data';
 import {
   GeoBounds,
   GeoPoint,
@@ -43,45 +42,35 @@ function parseUserPoint(params: URLSearchParams): GeoPoint | undefined {
 
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
-  const city = params.get('city') || 'All';
   const q = (params.get('q') || '').trim().toLowerCase();
   const bounds = parseBounds(params);
   const userPoint = parseUserPoint(params);
+  const maxDistRaw = Number(params.get('maxDistance'));
+  const maxDistance =
+    params.has('maxDistance') && Number.isFinite(maxDistRaw) && maxDistRaw > 0
+      ? maxDistRaw
+      : undefined;
 
-  if (city === 'All' || city === 'Taipei' || city === 'NewTaipei') {
-    try {
-      const realStations = await getRealYouBikeStations(
-        city,
-        q,
-        bounds,
-        userPoint
-      );
-      if (realStations.length > 0 || q || bounds) {
-        return NextResponse.json({
-          stations: realStations.slice(0, 80),
-          total: realStations.length,
-          updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
-          source: 'opendata',
-        });
-      }
-    } catch {
-      // fallback to mock
-    }
+  try {
+    const { stations, total } = await getRealYouBikeStations(
+      q,
+      bounds,
+      userPoint,
+      maxDistance,
+      50
+    );
+    return NextResponse.json({
+      stations,
+      total,
+      updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
+      source: 'opendata',
+    });
+  } catch {
+    return NextResponse.json({
+      stations: [],
+      total: 0,
+      updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
+      source: 'mock',
+    });
   }
-
-  const stations = MOCK_YOUBIKE_STATIONS.filter((st) => {
-    const matchCity = city === 'All' || st.city === city;
-    const matchQ =
-      !q ||
-      st.stationName.toLowerCase().includes(q) ||
-      st.address.toLowerCase().includes(q);
-    return matchCity && matchQ;
-  });
-
-  return NextResponse.json({
-    stations,
-    total: stations.length,
-    updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
-    source: 'mock',
-  });
 }

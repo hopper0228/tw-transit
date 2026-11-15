@@ -1,24 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { MOCK_PARKING_LOTS } from '@/lib/mock-data';
 import {
   GeoBounds,
   GeoPoint,
-  getRealTaipeiParkingLots,
+  getRealParkingLots,
 } from '@/lib/opendata-client';
-
-function parseUserPoint(params: URLSearchParams): GeoPoint | undefined {
-  const lat = Number(params.get('lat'));
-  const lng = Number(params.get('lng'));
-  if (
-    params.has('lat') &&
-    params.has('lng') &&
-    Number.isFinite(lat) &&
-    Number.isFinite(lng)
-  ) {
-    return { lat, lng };
-  }
-  return undefined;
-}
 
 function parseBounds(params: URLSearchParams): GeoBounds | undefined {
   const north = Number(params.get('north'));
@@ -41,55 +26,53 @@ function parseBounds(params: URLSearchParams): GeoBounds | undefined {
   return undefined;
 }
 
+function parseUserPoint(params: URLSearchParams): GeoPoint | undefined {
+  const lat = Number(params.get('lat'));
+  const lng = Number(params.get('lng'));
+  if (
+    params.has('lat') &&
+    params.has('lng') &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng)
+  ) {
+    return { lat, lng };
+  }
+  return undefined;
+}
+
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
-  const city = params.get('city') || 'All';
   const q = (params.get('q') || '').trim().toLowerCase();
   const onlyAvailable = params.get('onlyAvailable') === 'true';
   const bounds = parseBounds(params);
   const userPoint = parseUserPoint(params);
+  const maxDistRaw = Number(params.get('maxDistance'));
+  const maxDistance =
+    params.has('maxDistance') && Number.isFinite(maxDistRaw) && maxDistRaw > 0
+      ? maxDistRaw
+      : undefined;
 
-  if (city === 'All' || city === 'Taipei') {
-    try {
-      const realLots = await getRealTaipeiParkingLots(
-        q,
-        onlyAvailable,
-        bounds,
-        userPoint
-      );
-      if (realLots.length > 0 || q || bounds) {
-        return NextResponse.json({
-          lots: realLots.slice(0, 100),
-          total: realLots.length,
-          updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
-          source: 'opendata',
-        });
-      }
-    } catch {
-      // fallback to mock
-    }
+  try {
+    const { lots, total } = await getRealParkingLots(
+      q,
+      onlyAvailable,
+      bounds,
+      userPoint,
+      maxDistance,
+      50
+    );
+    return NextResponse.json({
+      lots,
+      total,
+      updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
+      source: 'opendata',
+    });
+  } catch {
+    return NextResponse.json({
+      lots: [],
+      total: 0,
+      updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
+      source: 'mock',
+    });
   }
-
-  const lots = MOCK_PARKING_LOTS.filter((lot) => {
-    const matchCity = city === 'All' || lot.city === city;
-    const matchQ =
-      !q ||
-      lot.name.toLowerCase().includes(q) ||
-      lot.address.toLowerCase().includes(q);
-    const matchAvail = !onlyAvailable || lot.availableSpaces > 0;
-    const matchBounds =
-      !bounds ||
-      (lot.lat >= bounds.south &&
-        lot.lat <= bounds.north &&
-        lot.lng >= bounds.west &&
-        lot.lng <= bounds.east);
-    return matchCity && matchQ && matchAvail && matchBounds;
-  });
-
-  return NextResponse.json({
-    lots,
-    total: lots.length,
-    updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
-    source: 'mock',
-  });
 }

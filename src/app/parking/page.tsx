@@ -26,18 +26,18 @@ const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
   ),
 });
 
-const CITIES = [
-  { code: 'All', name: '全部縣市' },
-  { code: 'Taipei', name: '台北市' },
-  { code: 'NewTaipei', name: '新北市' },
-  { code: 'Taichung', name: '台中市' },
-  { code: 'Kaohsiung', name: '高雄市' },
+const DISTANCE_FILTERS = [
+  { value: 500, label: '500m 內' },
+  { value: 1000, label: '1km 內' },
+  { value: 3000, label: '3km 內' },
+  { value: 0, label: '不限距離' },
 ];
 
 function ParkingPageInner() {
   const searchParams = useSearchParams();
-  const { coords, status: locStatus, refreshLocation } = useUserLocation();
-  const [city, setCity] = useState(searchParams.get('city') || 'All');
+  const { coords, status: locStatus, ready, refreshLocation } = useUserLocation();
+
+  const [maxDistance, setMaxDistance] = useState<number>(3000);
   const [query, setQuery] = useState(searchParams.get('q') || '');
   const [onlyAvailable, setOnlyAvailable] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
@@ -48,9 +48,9 @@ function ParkingPageInner() {
   const [loading, setLoading] = useState(false);
 
   const loadLots = useCallback(async () => {
+    if (!ready) return;
     try {
       const qs = new URLSearchParams({
-        city,
         q: query,
         onlyAvailable: String(onlyAvailable),
       });
@@ -63,6 +63,8 @@ function ParkingPageInner() {
         qs.set('south', String(mapBounds.south));
         qs.set('east', String(mapBounds.east));
         qs.set('west', String(mapBounds.west));
+      } else if (coords && maxDistance > 0 && !query.trim()) {
+        qs.set('maxDistance', String(maxDistance));
       }
       const res = await fetch(`/api/transit/parking?${qs.toString()}`);
       const data = await res.json();
@@ -74,14 +76,15 @@ function ParkingPageInner() {
     } finally {
       setLoading(false);
     }
-  }, [city, query, onlyAvailable, coords, viewMode, mapBounds]);
+  }, [ready, query, onlyAvailable, coords, viewMode, mapBounds, maxDistance]);
 
   useEffect(() => {
+    if (!ready) return;
     const t = setTimeout(() => {
       void loadLots();
     }, 0);
     return () => clearTimeout(t);
-  }, [loadLots]);
+  }, [ready, loadLots]);
 
   const handleManualRefresh = useCallback(() => {
     setLoading(true);
@@ -93,10 +96,20 @@ function ParkingPageInner() {
     lat: lot.lat,
     lng: lot.lng,
     title: lot.name,
-    subtitle: `剩餘 ${lot.availableSpaces} / ${lot.totalSpaces} 位 · ${lot.fareDescription}`,
-    badgeText: lot.availableSpaces === 0 ? '已滿' : `P ${lot.availableSpaces}`,
+    subtitle:
+      lot.availableSpaces !== null
+        ? `剩餘 ${lot.availableSpaces} / ${lot.totalSpaces} 位 · ${lot.fareDescription}`
+        : `總車位 ${lot.totalSpaces} 格 · ${lot.fareDescription}`,
+    badgeText:
+      lot.availableSpaces === null
+        ? `P ${lot.totalSpaces}`
+        : lot.availableSpaces === 0
+        ? '已滿'
+        : `P ${lot.availableSpaces}`,
     color:
-      lot.availableSpaces === 0
+      lot.availableSpaces === null
+        ? '#0f766e'
+        : lot.availableSpaces === 0
         ? '#dc2626'
         : lot.availableSpaces < 15
         ? '#ea580c'
@@ -113,7 +126,7 @@ function ParkingPageInner() {
             即時停車場查詢
           </h1>
           <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-            即時剩餘車位、收費標準與一鍵地圖導航
+            不分縣市，依裝置距離與地圖顯示範圍即時呈現
           </p>
         </div>
 
@@ -157,24 +170,31 @@ function ParkingPageInner() {
         onRefresh={refreshLocation}
       />
 
-      {/* 篩選列 */}
+      {/* 距離範圍篩選與搜尋欄 */}
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap gap-2">
-            {CITIES.map((c) => (
-              <button
-                key={c.code}
-                onClick={() => setCity(c.code)}
-                className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
-                  city === c.code
-                    ? 'bg-violet-600 text-white'
-                    : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300'
-                }`}
-              >
-                {c.name}
-              </button>
-            ))}
-          </div>
+          {viewMode === 'list' && coords ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold text-slate-500">距離範圍：</span>
+              {DISTANCE_FILTERS.map((d) => (
+                <button
+                  key={d.value}
+                  onClick={() => setMaxDistance(d.value)}
+                  className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
+                    maxDistance === d.value
+                      ? 'bg-violet-600 text-white'
+                      : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300'
+                  }`}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <span className="text-xs text-slate-500">
+              拖曳或縮放地圖即可載入周邊停車場
+            </span>
+          )}
 
           <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300">
             <input
@@ -183,7 +203,7 @@ function ParkingPageInner() {
               onChange={(e) => setOnlyAvailable(e.target.checked)}
               className="h-4 w-4 rounded accent-violet-600"
             />
-            只顯示有空位
+            只看有即時空位
           </label>
         </div>
 
@@ -193,7 +213,7 @@ function ParkingPageInner() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜尋停車場名稱或路段（如：府前、台北車站、板橋）"
+            placeholder="搜尋停車場名稱或路段（如：府前、板橋、中和）"
             className="w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-10 pr-4 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
           />
         </div>
@@ -202,19 +222,26 @@ function ParkingPageInner() {
       {viewMode === 'map' ? (
         <div className="space-y-2.5">
           <LeafletMap
+            center={coords ? [coords.lat, coords.lng] : undefined}
             markers={markers}
             heightClass="h-[500px]"
             onBoundsChange={(b) => setMapBounds(b)}
           />
           <p className="text-center text-xs text-slate-500">
-            移動或縮放地圖即自動更新該範圍停車場 · 目前範圍顯示 {lots.length} 場（共符合 {totalCount} 場）
+            移動或縮放地圖即自動更新該範圍停車場（跨台北／新北） · 目前顯示 {lots.length} 場（共符合 {totalCount} 場）
           </p>
+        </div>
+      ) : lots.length === 0 ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900">
+          此範圍暫無符合條件的停車場，可切換「不限距離」或切換至「地圖」拖曳查看。
         </div>
       ) : (
         <div className="space-y-3">
           {lots.map((lot) => {
-            const isFull = lot.availableSpaces === 0;
-            const isLow = lot.availableSpaces > 0 && lot.availableSpaces < 15;
+            const hasLive = lot.availableSpaces !== null;
+            const isFull = hasLive && lot.availableSpaces === 0;
+            const isLow =
+              hasLive && lot.availableSpaces !== null && lot.availableSpaces > 0 && lot.availableSpaces < 15;
             const navUrl = `https://www.google.com/maps/dir/?api=1&destination=${lot.lat},${lot.lng}`;
 
             return (
@@ -242,26 +269,34 @@ function ParkingPageInner() {
                     {lot.address}
                   </p>
                   <p className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                    費率：{lot.fareDescription} · 更新於 {lot.updatedAt}
+                    費率：{lot.fareDescription} · {lot.updatedAt}
                   </p>
                 </div>
 
                 <div className="flex items-center gap-3">
                   <div
-                    className={`min-w-[88px] rounded-xl px-3 py-2 text-center ${
-                      isFull
+                    className={`min-w-[92px] rounded-xl px-3 py-2 text-center ${
+                      !hasLive
+                        ? 'bg-teal-50 text-teal-800 dark:bg-teal-950/60 dark:text-teal-300'
+                        : isFull
                         ? 'bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-300'
                         : isLow
                         ? 'bg-orange-50 text-orange-700 dark:bg-orange-950/60 dark:text-orange-300'
                         : 'bg-violet-50 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300'
                     }`}
                   >
-                    <div className="text-[10px] font-semibold">剩餘車位</div>
+                    <div className="text-[10px] font-semibold">
+                      {hasLive ? '即時剩餘' : '總格位數'}
+                    </div>
                     <div className="text-xl font-extrabold tabular-nums">
-                      {isFull ? '已滿' : lot.availableSpaces}
+                      {!hasLive
+                        ? lot.totalSpaces
+                        : isFull
+                        ? '已滿'
+                        : lot.availableSpaces}
                     </div>
                     <div className="text-[10px] opacity-75">
-                      共 {lot.totalSpaces} 位
+                      {hasLive ? `共 ${lot.totalSpaces} 位` : '依現場為準'}
                     </div>
                   </div>
 

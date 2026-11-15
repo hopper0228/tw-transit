@@ -129,7 +129,8 @@ export interface ParkingLot {
   lat: number;
   lng: number;
   totalSpaces: number;
-  availableSpaces: number;
+  /** null 表示僅有靜態總格位與費率資訊，無即時剩餘車位連線 */
+  availableSpaces: number | null;
   fareDescription: string;
   parkingType: '立體' | '平面' | '地下';
   updatedAt: string;

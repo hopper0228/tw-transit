@@ -8,7 +8,7 @@ import {
   TRA_STATIONS,
 } from '@/lib/mock-data';
 import {
-  getRealTaipeiParkingLots,
+  getRealParkingLots,
   getRealYouBikeStations,
   getTaipeiBusRoutes,
 } from '@/lib/opendata-client';
@@ -101,14 +101,14 @@ export async function GET(req: NextRequest) {
 
   // 5. 真實 YouBike
   try {
-    const realYb = await getRealYouBikeStations('Taipei', q);
+    const { stations: realYb } = await getRealYouBikeStations(q, undefined, undefined, undefined, 4);
     for (const yb of realYb.slice(0, 4)) {
       results.push({
         mode: 'youbike',
         badge: 'YouBike',
         title: yb.stationName,
         subtitle: `可借 ${yb.availableBikes20} · 可還 ${yb.availableReturnDocks}`,
-        href: `/youbike?city=Taipei&q=${encodeURIComponent(yb.stationName)}`,
+        href: `/youbike?q=${encodeURIComponent(yb.stationName)}`,
       });
     }
   } catch {
@@ -127,14 +127,17 @@ export async function GET(req: NextRequest) {
 
   // 6. 真實停車場
   try {
-    const realPk = await getRealTaipeiParkingLots(q, false);
+    const { lots: realPk } = await getRealParkingLots(q, false, undefined, undefined, undefined, 4);
     for (const pk of realPk.slice(0, 4)) {
       results.push({
         mode: 'parking',
         badge: '停車場',
         title: pk.name,
-        subtitle: `剩餘 ${pk.availableSpaces} 位 · ${pk.address}`,
-        href: `/parking?city=Taipei&q=${encodeURIComponent(pk.name)}`,
+        subtitle:
+          pk.availableSpaces !== null
+            ? `剩餘 ${pk.availableSpaces} 位 · ${pk.address}`
+            : `總車位 ${pk.totalSpaces} 格 · ${pk.address}`,
+        href: `/parking?q=${encodeURIComponent(pk.name)}`,
       });
     }
   } catch {

@@ -36,10 +36,12 @@ export function formatDistance(meters: number): string {
 export function useUserLocation() {
   const [coords, setCoords] = useState<GeoCoords | null>(null);
   const [status, setStatus] = useState<'idle' | 'locating' | 'granted' | 'denied'>('idle');
+  const [ready, setReady] = useState(false);
 
   const requestLocation = useCallback(() => {
     if (typeof window === 'undefined' || !navigator.geolocation) {
       setStatus('denied');
+      setReady(true);
       return;
     }
 
@@ -52,6 +54,7 @@ export function useUserLocation() {
         };
         setCoords(next);
         setStatus('granted');
+        setReady(true);
         try {
           sessionStorage.setItem(SESSION_KEY, JSON.stringify(next));
         } catch {
@@ -60,6 +63,7 @@ export function useUserLocation() {
       },
       () => {
         setStatus('denied');
+        setReady(true);
       },
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
     );
@@ -74,6 +78,7 @@ export function useUserLocation() {
           if (Number.isFinite(parsed.lat) && Number.isFinite(parsed.lng)) {
             setCoords(parsed);
             setStatus('granted');
+            setReady(true);
             return;
           }
         }
@@ -85,5 +90,5 @@ export function useUserLocation() {
     return () => clearTimeout(timer);
   }, [requestLocation]);
 
-  return { coords, status, refreshLocation: requestLocation };
+  return { coords, status, ready, refreshLocation: requestLocation };
 }

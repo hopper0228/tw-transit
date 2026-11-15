@@ -72,7 +72,7 @@ function BusPageInner() {
   const initialCity = searchParams.get('city') || 'Taipei';
   const initialRoute = searchParams.get('route');
 
-  const { coords, status: locStatus, refreshLocation } = useUserLocation();
+  const { coords, status: locStatus, ready, refreshLocation } = useUserLocation();
   const [city, setCity] = useState(initialCity);
   const [query, setQuery] = useState('');
   const [showKeypad, setShowKeypad] = useState(false);
@@ -87,8 +87,9 @@ function BusPageInner() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [faved, setFaved] = useState(false);
 
-  // 取得路線清單 (帶入裝置座標由近到遠排序)
+  // 取得路線清單 (等定位狀態 ready 後只請求 1 次，帶入裝置座標由近到遠排序)
   useEffect(() => {
+    if (!ready) return;
     let active = true;
     const t = setTimeout(() => {
       if (active) setLoadingList(true);
@@ -113,7 +114,7 @@ function BusPageInner() {
       active = false;
       clearTimeout(t);
     };
-  }, [city, query, coords]);
+  }, [ready, city, query, coords]);
 
   const loadDetail = useCallback(
     async (routeName: string, dir: 0 | 1) => {

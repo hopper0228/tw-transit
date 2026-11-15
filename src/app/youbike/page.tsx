@@ -19,19 +19,18 @@ const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
   ),
 });
 
-const CITIES = [
-  { code: 'All', name: '全部縣市' },
-  { code: 'Taipei', name: '台北市' },
-  { code: 'NewTaipei', name: '新北市' },
-  { code: 'Taichung', name: '台中市' },
-  { code: 'Kaohsiung', name: '高雄市' },
+const DISTANCE_FILTERS = [
+  { value: 500, label: '500m 內' },
+  { value: 1000, label: '1km 內' },
+  { value: 3000, label: '3km 內' },
+  { value: 0, label: '不限距離' },
 ];
 
 function YouBikePageInner() {
   const searchParams = useSearchParams();
-  const { coords, status: locStatus, refreshLocation } = useUserLocation();
+  const { coords, status: locStatus, ready, refreshLocation } = useUserLocation();
 
-  const [city, setCity] = useState(searchParams.get('city') || 'All');
+  const [maxDistance, setMaxDistance] = useState<number>(3000);
   const [query, setQuery] = useState(searchParams.get('q') || '');
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [stations, setStations] = useState<YouBikeStation[]>([]);
@@ -41,17 +40,21 @@ function YouBikePageInner() {
   const [loading, setLoading] = useState(false);
 
   const loadStations = useCallback(async () => {
+    if (!ready) return;
     try {
-      const qs = new URLSearchParams({ city, q: query });
+      const qs = new URLSearchParams({ q: query });
       if (coords) {
         qs.set('lat', String(coords.lat));
         qs.set('lng', String(coords.lng));
       }
+      // 地圖模式時以地圖顯示範圍為主 (不限制裝置距離半徑，方便使用者拖曳到任何地方看)
       if (viewMode === 'map' && mapBounds) {
         qs.set('north', String(mapBounds.north));
         qs.set('south', String(mapBounds.south));
         qs.set('east', String(mapBounds.east));
         qs.set('west', String(mapBounds.west));
+      } else if (coords && maxDistance > 0 && !query.trim()) {
+        qs.set('maxDistance', String(maxDistance));
       }
       const res = await fetch(`/api/transit/youbike?${qs.toString()}`);
       const data = await res.json();
@@ -63,14 +66,15 @@ function YouBikePageInner() {
     } finally {
       setLoading(false);
     }
-  }, [city, query, coords, viewMode, mapBounds]);
+  }, [ready, query, coords, viewMode, mapBounds, maxDistance]);
 
   useEffect(() => {
+    if (!ready) return;
     const t = setTimeout(() => {
       void loadStations();
     }, 0);
     return () => clearTimeout(t);
-  }, [loadStations]);
+  }, [ready, loadStations]);
 
   const handleManualRefresh = useCallback(() => {
     setLoading(true);
@@ -82,9 +86,9 @@ function YouBikePageInner() {
     lat: st.lat,
     lng: st.lng,
     title: st.stationName,
-    subtitle: `可借: ${st.availableBikes20 + st.availableBikes20E} (2.0E: ${
-      st.availableBikes20E
-    }) / 可還: ${st.availableReturnDocks}`,
+    subtitle: `可借: ${st.availableBikes20 + st.availableBikes20E} / 可還: ${
+      st.availableReturnDocks
+    }`,
     badgeText: `🚲 ${st.availableBikes20 + st.availableBikes20E}`,
     color: st.availableBikes20 + st.availableBikes20E > 0 ? '#ca8a04' : '#dc2626',
     type: 'youbike',
@@ -99,7 +103,7 @@ function YouBikePageInner() {
             YouBike 即時查詢
           </h1>
           <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-            依裝置目前位置由近到遠排序，即時區分可借與可還空位
+            不分縣市，依裝置位置距離與地圖顯示範圍即時呈現
           </p>
         </div>
 
@@ -143,23 +147,26 @@ function YouBikePageInner() {
         onRefresh={refreshLocation}
       />
 
-      {/* 篩選列 */}
+      {/* 距離範圍篩選與搜尋欄 */}
       <div className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          {CITIES.map((c) => (
-            <button
-              key={c.code}
-              onClick={() => setCity(c.code)}
-              className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
-                city === c.code
-                  ? 'bg-amber-600 text-white'
-                  : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300'
-              }`}
-            >
-              {c.name}
-            </button>
-          ))}
-        </div>
+        {viewMode === 'list' && coords && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-slate-500">距離範圍：</span>
+            {DISTANCE_FILTERS.map((d) => (
+              <button
+                key={d.value}
+                onClick={() => setMaxDistance(d.value)}
+                className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
+                  maxDistance === d.value
+                    ? 'bg-amber-600 text-white'
+                    : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300'
+                }`}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="relative">
           <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -167,7 +174,7 @@ function YouBikePageInner() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜尋站點名稱或路名（如：市政府、台北車站、板橋）"
+            placeholder="搜尋站點名稱或路名（如：市政府、板橋、台北車站）"
             className="w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-10 pr-4 text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
           />
         </div>
@@ -176,13 +183,18 @@ function YouBikePageInner() {
       {viewMode === 'map' ? (
         <div className="space-y-2.5">
           <LeafletMap
+            center={coords ? [coords.lat, coords.lng] : undefined}
             markers={markers}
             heightClass="h-[500px]"
             onBoundsChange={(b) => setMapBounds(b)}
           />
           <p className="text-center text-xs text-slate-500">
-            移動或縮放地圖即自動更新該範圍站點 · 目前顯示 {stations.length} 站（共符合 {totalCount} 站）
+            移動或縮放地圖即自動更新該範圍站點（跨台北／新北） · 目前顯示 {stations.length} 站（共符合 {totalCount} 站）
           </p>
+        </div>
+      ) : stations.length === 0 ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900">
+          附近 {maxDistance > 0 ? `${maxDistance / 1000} km` : ''} 暫無符合站點，可切換「不限距離」或切換至「地圖」拖曳查看。
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -223,7 +235,7 @@ function YouBikePageInner() {
                       {totalAvail}
                     </div>
                     <div className="mt-0.5 text-[10px] opacity-80">
-                      2.0: {st.availableBikes20} · 電輔 2.0E: {st.availableBikes20E}
+                      總車柱 {st.totalDocks} 柱
                     </div>
                   </div>
 
@@ -239,7 +251,7 @@ function YouBikePageInner() {
                       {st.availableReturnDocks}
                     </div>
                     <div className="mt-0.5 text-[10px] opacity-80">
-                      總車柱 {st.totalDocks} 柱
+                      {st.city === 'Taipei' ? '台北市' : '新北市'}
                     </div>
                   </div>
                 </div>

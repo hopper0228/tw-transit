@@ -285,13 +285,81 @@ function calcDistanceMeters(
   return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
 
+/**
+ * 台灣 TWD97 二度分帶 (121°E) 轉 WGS84 經緯度
+ */
+function twd97ToWgs84(x: number, y: number): { lat: number; lng: number } | null {
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 100000 || y < 2000000) {
+    return null;
+  }
+  const a = 6378137.0;
+  const b = 6356752.314245;
+  const lon0 = (121 * Math.PI) / 180;
+  const k0 = 0.9999;
+  const dx = 250000;
+  const e = Math.sqrt(1 - (b * b) / (a * a));
+  const e2 = (e * e) / (1 - e * e);
+
+  const xAdj = x - dx;
+  const M = y / k0;
+  const mu =
+    M /
+    (a *
+      (1 -
+        (e * e) / 4 -
+        (3 * Math.pow(e, 4)) / 64 -
+        (5 * Math.pow(e, 6)) / 256));
+  const e1 = (1 - Math.sqrt(1 - e * e)) / (1 + Math.sqrt(1 - e * e));
+  const J1 = (3 * e1) / 2 - (27 * Math.pow(e1, 3)) / 32;
+  const J2 = (21 * e1 * e1) / 16 - (55 * Math.pow(e1, 4)) / 32;
+  const J3 = (151 * Math.pow(e1, 3)) / 96;
+  const J4 = (1097 * Math.pow(e1, 4)) / 512;
+
+  const fp =
+    mu +
+    J1 * Math.sin(2 * mu) +
+    J2 * Math.sin(4 * mu) +
+    J3 * Math.sin(6 * mu) +
+    J4 * Math.sin(8 * mu);
+
+  const sinFp = Math.sin(fp);
+  const cosFp = Math.cos(fp);
+  const tanFp = Math.tan(fp);
+  const C1 = e2 * cosFp * cosFp;
+  const T1 = tanFp * tanFp;
+  const R1 = (a * (1 - e * e)) / Math.pow(1 - e * e * sinFp * sinFp, 1.5);
+  const N1 = a / Math.sqrt(1 - e * e * sinFp * sinFp);
+  const D = xAdj / (N1 * k0);
+
+  const Q1 = (N1 * tanFp) / R1;
+  const Q2 = (D * D) / 2;
+  const Q3 =
+    ((5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * e2) * Math.pow(D, 4)) / 24;
+  const Q4 =
+    ((61 + 90 * T1 + 298 * C1 + 45 * T1 * T1 - 3 * C1 * C1 - 252 * e2) *
+      Math.pow(D, 6)) /
+    720;
+  const lat = ((fp - Q1 * (Q2 - Q3 + Q4)) * 180) / Math.PI;
+
+  const Q5 = D;
+  const Q6 = ((1 + 2 * T1 + C1) * Math.pow(D, 3)) / 6;
+  const Q7 =
+    ((5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * e2 + 24 * T1 * T1) *
+      Math.pow(D, 5)) /
+    120;
+  const lng = ((lon0 + (Q5 - Q6 + Q7) / cosFp) * 180) / Math.PI;
+
+  return { lat, lng };
+}
+
 export async function getTaipeiBusRoutes(
   query?: string,
-  userPoint?: GeoPoint
+  userPoint?: GeoPoint,
+  limit = 40
 ): Promise<BusRouteInfo[]> {
   const routes = await getCompactRoutes();
   const q = (query || '').trim().toLowerCase();
-  let filtered = q
+  const filtered = q
     ? routes.filter(
         (r) =>
           r.routeName.toLowerCase().includes(q) ||
@@ -300,27 +368,50 @@ export async function getTaipeiBusRoutes(
       )
     : routes;
 
-  if (userPoint) {
-    const stopsMap = await getIndexedStops();
-    filtered = filtered
-      .map((r) => {
-        const bucket = stopsMap.get(Number(r.routeUid));
-        if (!bucket) return r;
-        let minDist = Infinity;
-        for (const s of bucket.dir0) {
-          const d = calcDistanceMeters(userPoint.lat, userPoint.lng, s.lat, s.lng);
-          if (d < minDist) minDist = d;
-        }
-        return Number.isFinite(minDist)
-          ? { ...r, distanceMeters: minDist }
-          : r;
-      })
-      .sort(
-        (a, b) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity)
-      );
+  if (!userPoint) {
+    return filtered.slice(0, limit);
   }
 
-  return filtered;
+  // 快速平方距離排序，最後只對前 limit 筆計算精確公尺數
+  const stopsMap = await getIndexedStops();
+  const cosLat = Math.cos((userPoint.lat * Math.PI) / 180);
+
+  const ranked = filtered
+    .map((r) => {
+      const bucket = stopsMap.get(Number(r.routeUid));
+      if (!bucket) return { r, approxSq: Infinity, nearLat: 0, nearLng: 0 };
+      let minSq = Infinity;
+      let nearLat = 0;
+      let nearLng = 0;
+      const list = bucket.dir0.length > 0 ? bucket.dir0 : bucket.dir1;
+      for (const s of list) {
+        const dLat = s.lat - userPoint.lat;
+        const dLng = (s.lng - userPoint.lng) * cosLat;
+        const sq = dLat * dLat + dLng * dLng;
+        if (sq < minSq) {
+          minSq = sq;
+          nearLat = s.lat;
+          nearLng = s.lng;
+        }
+      }
+      return { r, approxSq: minSq, nearLat, nearLng };
+    })
+    .sort((a, b) => a.approxSq - b.approxSq)
+    .slice(0, limit);
+
+  return ranked.map(({ r, approxSq, nearLat, nearLng }) =>
+    Number.isFinite(approxSq)
+      ? {
+          ...r,
+          distanceMeters: calcDistanceMeters(
+            userPoint.lat,
+            userPoint.lng,
+            nearLat,
+            nearLng
+          ),
+        }
+      : r
+  );
 }
 
 export async function getTaipeiBusRouteDetail(
@@ -461,15 +552,14 @@ interface NewTaipeiYouBikeRaw {
 }
 
 export async function getRealYouBikeStations(
-  city: string,
   query?: string,
   bounds?: GeoBounds,
-  userPoint?: GeoPoint
-): Promise<YouBikeStation[]> {
-  const results: YouBikeStation[] = [];
-
-  if (city === 'All' || city === 'Taipei') {
-    const tpe = await fetchAndTransform<TaipeiYouBikeRaw[], YouBikeStation[]>(
+  userPoint?: GeoPoint,
+  maxDistanceMeters?: number,
+  limit = 50
+): Promise<{ stations: YouBikeStation[]; total: number }> {
+  const [tpe, ntpc] = await Promise.all([
+    fetchAndTransform<TaipeiYouBikeRaw[], YouBikeStation[]>(
       'tpe-youbike-compact',
       'https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json',
       30,
@@ -489,14 +579,10 @@ export async function getRealYouBikeStations(
           serviceStatus: st.act === '1' ? 1 : 0,
           updatedAt: st.updateTime?.slice(11, 19) || '剛剛',
         }))
-    );
-    results.push(...tpe);
-  }
-
-  if (city === 'All' || city === 'NewTaipei') {
-    const ntpc = await fetchAndTransform<NewTaipeiYouBikeRaw[], YouBikeStation[]>(
-      'ntpc-youbike-compact',
-      'https://data.ntpc.gov.tw/api/datasets/010e5b15-3823-4b20-b401-b1cf000550c5/json?size=500',
+    ).catch(() => [] as YouBikeStation[]),
+    fetchAndTransform<NewTaipeiYouBikeRaw[], YouBikeStation[]>(
+      'ntpc-youbike-full',
+      'https://data.ntpc.gov.tw/api/datasets/010e5b15-3823-4b20-b401-b1cf000550c5/json?page=0&size=2000',
       30,
       false,
       (raw) =>
@@ -508,7 +594,7 @@ export async function getRealYouBikeStations(
             stationUid: st.sno,
             stationName: st.sna.replace(/^YouBike2\.0_/, ''),
             city: 'NewTaipei',
-            address: `${st.sarea} · ${st.ar}`,
+            address: `新北 ${st.sarea} · ${st.ar}`,
             lat: Number(st.lat),
             lng: Number(st.lng),
             totalDocks: tot,
@@ -519,12 +605,13 @@ export async function getRealYouBikeStations(
             updatedAt: '即時',
           };
         })
-    );
-    results.push(...ntpc);
-  }
+    ).catch(() => [] as YouBikeStation[]),
+  ]);
 
+  const allStations = [...tpe, ...ntpc];
   const q = (query || '').trim().toLowerCase();
-  let filtered = results.filter((s) => {
+
+  const filtered = allStations.filter((s) => {
     if (
       q &&
       !s.stationName.toLowerCase().includes(q) &&
@@ -545,20 +632,34 @@ export async function getRealYouBikeStations(
   });
 
   if (userPoint) {
-    filtered = filtered
-      .map((s) => ({
-        ...s,
-        distanceMeters: calcDistanceMeters(
-          userPoint.lat,
-          userPoint.lng,
-          s.lat,
-          s.lng
-        ),
-      }))
-      .sort(
-        (a, b) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity)
-      );
-  } else if (bounds) {
+    const cosLat = Math.cos((userPoint.lat * Math.PI) / 180);
+    // 約略半徑過濾 (1 度緯度 ≈ 111km)
+    const maxDegSq = maxDistanceMeters
+      ? (maxDistanceMeters / 111000) ** 2
+      : Infinity;
+
+    const scored = filtered
+      .map((s) => {
+        const dLat = s.lat - userPoint.lat;
+        const dLng = (s.lng - userPoint.lng) * cosLat;
+        return { s, sq: dLat * dLat + dLng * dLng };
+      })
+      .filter((x) => x.sq <= maxDegSq * 1.25)
+      .sort((a, b) => a.sq - b.sq);
+
+    const sliced = scored.slice(0, limit).map(({ s }) => {
+      const dist = calcDistanceMeters(userPoint.lat, userPoint.lng, s.lat, s.lng);
+      return { ...s, distanceMeters: dist };
+    });
+
+    const finalStations = maxDistanceMeters
+      ? sliced.filter((s) => (s.distanceMeters ?? 0) <= maxDistanceMeters)
+      : sliced;
+
+    return { stations: finalStations, total: scored.length };
+  }
+
+  if (bounds) {
     const centerLat = (bounds.north + bounds.south) / 2;
     const centerLng = (bounds.east + bounds.west) / 2;
     filtered.sort(
@@ -569,7 +670,7 @@ export async function getRealYouBikeStations(
     );
   }
 
-  return filtered;
+  return { stations: filtered.slice(0, limit), total: filtered.length };
 }
 
 // ==========================================
@@ -604,13 +705,27 @@ interface CompactParkingMeta {
   parkingType: '立體' | '平面';
 }
 
-export async function getRealTaipeiParkingLots(
+interface NtpcParkRaw {
+  ID: string;
+  AREA: string;
+  NAME: string;
+  TYPE: string;
+  ADDRESS: string;
+  PAYEX: string;
+  TW97X: string;
+  TW97Y: string;
+  TOTALCAR: string;
+}
+
+export async function getRealParkingLots(
   query?: string,
   onlyAvailable = false,
   bounds?: GeoBounds,
-  userPoint?: GeoPoint
-): Promise<ParkingLot[]> {
-  const [metas, availMap] = await Promise.all([
+  userPoint?: GeoPoint,
+  maxDistanceMeters?: number,
+  limit = 50
+): Promise<{ lots: ParkingLot[]; total: number }> {
+  const [tpeMetas, availMap, ntpcLots] = await Promise.all([
     fetchAndTransform<{ data: { park: TcmsvParkDesc[] } }, CompactParkingMeta[]>(
       'tpe-parking-desc-compact',
       'https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_alldesc.json',
@@ -632,7 +747,7 @@ export async function getRealTaipeiParkingLots(
             parkingType: p.type === '1' ? '立體' : '平面',
           };
         })
-    ),
+    ).catch(() => [] as CompactParkingMeta[]),
     fetchAndTransform<{ data: { park: TcmsvParkAvail[] } }, Map<string, number>>(
       'tpe-parking-avail-map',
       'https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_allavailable.json',
@@ -647,26 +762,52 @@ export async function getRealTaipeiParkingLots(
         }
         return map;
       }
-    ),
+    ).catch(() => new Map<string, number>()),
+    fetchAndTransform<NtpcParkRaw[], ParkingLot[]>(
+      'ntpc-parking-desc-compact',
+      'https://data.ntpc.gov.tw/api/datasets/b1464ef0-9c7c-4a6f-abf7-6bdf32847e68/json?page=0&size=1000',
+      3600,
+      false,
+      (raw) => {
+        const list: ParkingLot[] = [];
+        for (const p of raw || []) {
+          const wgs = twd97ToWgs84(Number(p.TW97X), Number(p.TW97Y));
+          if (!wgs) continue;
+          list.push({
+            carParkId: `NTPC-${p.ID}`,
+            name: p.NAME,
+            city: 'NewTaipei',
+            address: `新北 ${p.AREA} · ${p.ADDRESS}`,
+            lat: wgs.lat,
+            lng: wgs.lng,
+            totalSpaces: Number(p.TOTALCAR || 0),
+            availableSpaces: null,
+            fareDescription: p.PAYEX?.slice(0, 80) || '依現場公告',
+            parkingType: p.TYPE === '1' ? '平面' : '立體',
+            updatedAt: '費率與格位',
+          });
+        }
+        return list;
+      }
+    ).catch(() => [] as ParkingLot[]),
   ]);
 
   const q = (query || '').trim().toLowerCase();
-  const lots: ParkingLot[] = [];
+  const combined: ParkingLot[] = [];
 
-  for (const p of metas) {
+  for (const p of tpeMetas) {
     const avail = availMap.get(p.id);
     if (avail === undefined) continue;
     if (onlyAvailable && avail === 0) continue;
 
-    if (bounds) {
-      if (
-        p.lat < bounds.south ||
+    if (
+      bounds &&
+      (p.lat < bounds.south ||
         p.lat > bounds.north ||
         p.lng < bounds.west ||
-        p.lng > bounds.east
-      ) {
-        continue;
-      }
+        p.lng > bounds.east)
+    ) {
+      continue;
     }
 
     if (
@@ -677,7 +818,7 @@ export async function getRealTaipeiParkingLots(
       continue;
     }
 
-    lots.push({
+    combined.push({
       carParkId: p.id,
       name: p.name,
       city: 'Taipei',
@@ -689,21 +830,67 @@ export async function getRealTaipeiParkingLots(
       fareDescription: p.fareDescription,
       parkingType: p.parkingType,
       updatedAt: '即時',
-      distanceMeters: userPoint
-        ? calcDistanceMeters(userPoint.lat, userPoint.lng, p.lat, p.lng)
-        : undefined,
     });
   }
 
-  // 優先依裝置位置由近到遠排序；若無裝置位置但有地圖範圍，則依地圖中心排序
+  if (!onlyAvailable) {
+    for (const p of ntpcLots) {
+      if (
+        bounds &&
+        (p.lat < bounds.south ||
+          p.lat > bounds.north ||
+          p.lng < bounds.west ||
+          p.lng > bounds.east)
+      ) {
+        continue;
+      }
+      if (
+        q &&
+        !p.name.toLowerCase().includes(q) &&
+        !p.address.toLowerCase().includes(q)
+      ) {
+        continue;
+      }
+      combined.push(p);
+    }
+  }
+
   if (userPoint) {
-    lots.sort(
-      (a, b) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity)
-    );
-  } else if (bounds) {
+    const cosLat = Math.cos((userPoint.lat * Math.PI) / 180);
+    const maxDegSq = maxDistanceMeters
+      ? (maxDistanceMeters / 111000) ** 2
+      : Infinity;
+
+    const scored = combined
+      .map((lot) => {
+        const dLat = lot.lat - userPoint.lat;
+        const dLng = (lot.lng - userPoint.lng) * cosLat;
+        return { lot, sq: dLat * dLat + dLng * dLng };
+      })
+      .filter((x) => x.sq <= maxDegSq * 1.25)
+      .sort((a, b) => a.sq - b.sq);
+
+    const sliced = scored.slice(0, limit).map(({ lot }) => ({
+      ...lot,
+      distanceMeters: calcDistanceMeters(
+        userPoint.lat,
+        userPoint.lng,
+        lot.lat,
+        lot.lng
+      ),
+    }));
+
+    const finalLots = maxDistanceMeters
+      ? sliced.filter((l) => (l.distanceMeters ?? 0) <= maxDistanceMeters)
+      : sliced;
+
+    return { lots: finalLots, total: scored.length };
+  }
+
+  if (bounds) {
     const centerLat = (bounds.north + bounds.south) / 2;
     const centerLng = (bounds.east + bounds.west) / 2;
-    lots.sort(
+    combined.sort(
       (a, b) =>
         (a.lat - centerLat) ** 2 +
         (a.lng - centerLng) ** 2 -
@@ -711,5 +898,5 @@ export async function getRealTaipeiParkingLots(
     );
   }
 
-  return lots;
+  return { lots: combined.slice(0, limit), total: combined.length };
 }
