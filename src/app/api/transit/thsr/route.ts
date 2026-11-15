@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getMockThsrTrains, THSR_STATIONS } from '@/lib/mock-data';
+import { THSR_STATIONS } from '@/lib/mock-data';
+import { getRealThsrData } from '@/lib/rail-live';
 
 export async function GET(req: NextRequest) {
   const from = req.nextUrl.searchParams.get('from') || '1000';
   const to = req.nextUrl.searchParams.get('to') || '1040';
 
-  const trains = getMockThsrTrains(from, to);
+  const result = await getRealThsrData(from, to);
 
   return NextResponse.json({
     stations: THSR_STATIONS,
-    trains,
-    updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
-    source: 'mock',
+    trains: result.trains,
+    liveVehicles: result.liveVehicles,
+    updatedAt: result.updatedAt,
+    source: result.source,
   });
 }

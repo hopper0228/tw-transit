@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getMockTraData, TRA_STATIONS } from '@/lib/mock-data';
+import { TRA_STATIONS } from '@/lib/mock-data';
+import { getRealTraData } from '@/lib/rail-live';
 
 export async function GET(req: NextRequest) {
   const mode = req.nextUrl.searchParams.get('mode') === 'od' ? 'od' : 'board';
@@ -7,12 +8,13 @@ export async function GET(req: NextRequest) {
   const from = req.nextUrl.searchParams.get('from') || '1000';
   const to = req.nextUrl.searchParams.get('to') || '3300';
 
-  const trains = getMockTraData(mode, station, from, to);
+  const result = await getRealTraData(mode, station, from, to);
 
   return NextResponse.json({
     stations: TRA_STATIONS,
-    trains,
-    updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
-    source: 'mock',
+    trains: result.trains,
+    liveVehicles: result.liveVehicles,
+    updatedAt: result.updatedAt,
+    source: result.source,
   });
 }

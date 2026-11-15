@@ -11,9 +11,8 @@ import { TRA_STATIONS } from '@/lib/mock-data';
 import {
   findNearestRailStation,
   getTraStationCoord,
-  interpolateAlongPath,
 } from '@/lib/rail-geo';
-import { TraTrainRow } from '@/lib/types';
+import { LiveRailVehicle, TraTrainRow } from '@/lib/types';
 
 const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
   ssr: false,
@@ -48,10 +47,10 @@ function TraPageInner() {
   const [from, setFrom] = useState('1000');
   const [to, setTo] = useState('3300');
   const [trains, setTrains] = useState<TraTrainRow[]>([]);
+  const [liveVehicles, setLiveVehicles] = useState<LiveRailVehicle[]>([]);
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
-  const [animTick, setAnimTick] = useState(() => Math.floor(Date.now() / 1000));
   const { coords, ready } = useUserLocation();
   const hasAutoSelectedRef = useRef(Boolean(searchParams.get('station')));
   const [autoMatchedLabel, setAutoMatchedLabel] = useState<string | null>(null);
@@ -71,14 +70,6 @@ function TraPageInner() {
     }
   }, [ready, coords]);
 
-  useEffect(() => {
-    if (viewMode !== 'map') return;
-    const timer = setInterval(() => {
-      setAnimTick(Math.floor(Date.now() / 1000));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [viewMode]);
-
   const loadTra = useCallback(async () => {
     try {
       const params =
@@ -88,6 +79,7 @@ function TraPageInner() {
       const res = await fetch(`/api/transit/tra?${params}`);
       const data = await res.json();
       setTrains(data.trains || []);
+      setLiveVehicles(data.liveVehicles || []);
       setUpdatedAt(data.updatedAt || '');
     } catch {
       // ignore
@@ -144,47 +136,23 @@ function TraPageInner() {
       };
     });
 
-    const activeList = trains.slice(0, 8);
-    const vehicleMarkers: MapMarker[] = [];
-    if (polyline.length >= 2 && activeList.length > 0) {
-      const cycleSec = 240;
-      const baseProg = (animTick % cycleSec) / cycleSec;
-      activeList.forEach((t, idx) => {
-        const isReverse = idx % 2 === 1;
-        const offset = idx / activeList.length;
-        const prog = isReverse
-          ? (((1 - baseProg - offset) % 1) + 1) % 1
-          : (baseProg + offset) % 1;
-        const pos = interpolateAlongPath(polyline, prog);
-        const nextIdx = isReverse
-          ? Math.max(0, pos.segmentIndex)
-          : Math.min(stationsWithCoord.length - 1, pos.segmentIndex + 1);
-        const color =
-          t.trainType === '新自強' || t.trainType === '普悠瑪' || t.trainType === '太魯閣'
-            ? '#e11d48'
-            : t.trainType === '自強'
-              ? '#f97316'
-              : '#4f46e5';
-
-        vehicleMarkers.push({
-          id: `tra-train-${t.trainNo}-${idx}`,
-          lat: pos.lat,
-          lng: pos.lng,
-          title: `${t.trainType} ${t.trainNo} 次`,
-          subtitle: `往 ${t.destinationStation} · ${t.statusText}<br/>接近：${stationsWithCoord[nextIdx]?.name || ''}`,
-          badgeText: `${t.trainType} ${t.trainNo}`,
-          color,
-          type: 'tra',
-        });
-      });
-    }
+    const vehicleMarkers: MapMarker[] = liveVehicles.map((v) => ({
+      id: v.id,
+      lat: v.lat,
+      lng: v.lng,
+      title: v.title,
+      subtitle: v.subtitle,
+      badgeText: v.label,
+      color: v.color || '#4f46e5',
+      type: 'tra',
+    }));
 
     return {
       polyline,
       markers: [...stopMarkers, ...vehicleMarkers],
       vehicleCount: vehicleMarkers.length,
     };
-  }, [mode, station, from, to, trains, animTick]);
+  }, [mode, station, from, to, trains, liveVehicles]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-5">

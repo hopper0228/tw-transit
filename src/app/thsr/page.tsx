@@ -11,9 +11,8 @@ import { THSR_STATIONS } from '@/lib/mock-data';
 import {
   findNearestRailStation,
   getThsrStationCoord,
-  interpolateAlongPath,
 } from '@/lib/rail-geo';
-import { ThsrTrainRow } from '@/lib/types';
+import { LiveRailVehicle, ThsrTrainRow } from '@/lib/types';
 
 const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
   ssr: false,
@@ -52,10 +51,10 @@ function ThsrPageInner() {
   const [from, setFrom] = useState(searchParams.get('from') || '1000');
   const [to, setTo] = useState('1040');
   const [trains, setTrains] = useState<ThsrTrainRow[]>([]);
+  const [liveVehicles, setLiveVehicles] = useState<LiveRailVehicle[]>([]);
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
-  const [animTick, setAnimTick] = useState(() => Math.floor(Date.now() / 1000));
   const { coords, ready } = useUserLocation();
   const hasAutoSelectedRef = useRef(Boolean(searchParams.get('from')));
   const [autoMatchedLabel, setAutoMatchedLabel] = useState<string | null>(null);
@@ -74,19 +73,12 @@ function ThsrPageInner() {
     }
   }, [ready, coords]);
 
-  useEffect(() => {
-    if (viewMode !== 'map') return;
-    const timer = setInterval(() => {
-      setAnimTick(Math.floor(Date.now() / 1000));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [viewMode]);
-
   const loadThsr = useCallback(async () => {
     try {
       const res = await fetch(`/api/transit/thsr?from=${from}&to=${to}`);
       const data = await res.json();
       setTrains(data.trains || []);
+      setLiveVehicles(data.liveVehicles || []);
       setUpdatedAt(data.updatedAt || '');
     } catch {
       // ignore
@@ -134,40 +126,23 @@ function ThsrPageInner() {
       };
     });
 
-    const activeList = trains.slice(0, 6);
-    const vehicleMarkers: MapMarker[] = [];
-    if (polyline.length >= 2 && activeList.length > 0) {
-      const cycleSec = 180;
-      const baseProg = (animTick % cycleSec) / cycleSec;
-      activeList.forEach((t, idx) => {
-        const isNorthbound = idx % 2 === 1;
-        const offset = idx / activeList.length;
-        const prog = isNorthbound
-          ? (((1 - baseProg - offset) % 1) + 1) % 1
-          : (baseProg + offset) % 1;
-        const pos = interpolateAlongPath(polyline, prog);
-        const nextIdx = isNorthbound
-          ? Math.max(0, pos.segmentIndex)
-          : Math.min(stationsWithCoord.length - 1, pos.segmentIndex + 1);
-        vehicleMarkers.push({
-          id: `thsr-train-${t.trainNo}-${idx}`,
-          lat: pos.lat,
-          lng: pos.lng,
-          title: `高鐵 ${t.trainNo} 次 (${t.stopPattern})`,
-          subtitle: `${t.originStation} → ${t.destinationStation}<br/>下一站：${stationsWithCoord[nextIdx]?.name || ''} · 自由座 ${t.nonReservedCars}`,
-          badgeText: t.trainNo,
-          color: '#ea580c',
-          type: 'thsr',
-        });
-      });
-    }
+    const vehicleMarkers: MapMarker[] = liveVehicles.map((v) => ({
+      id: v.id,
+      lat: v.lat,
+      lng: v.lng,
+      title: v.title,
+      subtitle: v.subtitle,
+      badgeText: v.label,
+      color: v.color || '#ea580c',
+      type: 'thsr',
+    }));
 
     return {
       polyline,
       markers: [...stopMarkers, ...vehicleMarkers],
       vehicleCount: vehicleMarkers.length,
     };
-  }, [from, to, trains, animTick]);
+  }, [from, to, liveVehicles]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-5">

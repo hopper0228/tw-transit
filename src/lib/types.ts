@@ -75,6 +75,7 @@ export interface MetroStationDetail {
   stationId: string;
   stationName: string;
   platforms: MetroPlatformArrival[];
+  liveVehicles?: LiveRailVehicle[];
   updatedAt: string;
   source: DataSourceMode;
 }
@@ -135,6 +136,16 @@ export interface ParkingLot {
   parkingType: '立體' | '平面' | '地下';
   updatedAt: string;
   distanceMeters?: number;
+}
+
+export interface LiveRailVehicle {
+  id: string;
+  label: string;
+  title: string;
+  subtitle: string;
+  lat: number;
+  lng: number;
+  color?: string;
 }
 
 export interface FavoriteItem {

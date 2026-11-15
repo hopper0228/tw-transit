@@ -11,7 +11,6 @@ import { METRO_SYSTEMS } from '@/lib/mock-data';
 import {
   findNearestMetroStation,
   getMetroStationCoord,
-  interpolateAlongPath,
 } from '@/lib/rail-geo';
 import { MetroStationDetail } from '@/lib/types';
 import { isFavorite, toggleFavorite } from '@/lib/favorites';
@@ -60,7 +59,6 @@ function MetroPageInner() {
   const [loading, setLoading] = useState(false);
   const [faved, setFaved] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
-  const [animTick, setAnimTick] = useState(() => Math.floor(Date.now() / 1000));
 
   const { coords, ready } = useUserLocation();
   const hasAutoSelectedRef = useRef(Boolean(searchParams.get('station')));
@@ -80,14 +78,6 @@ function MetroPageInner() {
       return () => clearTimeout(t);
     }
   }, [ready, coords]);
-
-  useEffect(() => {
-    if (viewMode !== 'map') return;
-    const timer = setInterval(() => {
-      setAnimTick(Math.floor(Date.now() / 1000));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [viewMode]);
 
   const loadStation = useCallback(async (sys: string, st: string) => {
     try {
@@ -199,51 +189,23 @@ function MetroPageInner() {
       };
     });
 
-    const vehicleMarkers: MapMarker[] = [];
-    if (polyline.length >= 2) {
-      const cycleSec = Math.max(120, stationsWithCoord.length * 14);
-      const baseProg = (animTick % cycleSec) / cycleSec;
-      const trainsPerDir = 3;
-
-      for (let i = 0; i < trainsPerDir; i++) {
-        // 正向列車：往終點站
-        const fwdProg = (baseProg + i / trainsPerDir) % 1;
-        const fwdPos = interpolateAlongPath(polyline, fwdProg);
-        const fwdNextIdx = Math.min(stationsWithCoord.length - 1, fwdPos.segmentIndex + 1);
-        vehicleMarkers.push({
-          id: `metro-train-fwd-${line.code}-${i}`,
-          lat: fwdPos.lat,
-          lng: fwdPos.lng,
-          title: `${line.name} 列車 ${line.code}0${i * 2 + 1}`,
-          subtitle: `往 ${line.terminals[1]} · 下一站：${stationsWithCoord[fwdNextIdx]?.name || ''}`,
-          badgeText: `→ ${line.code}0${i * 2 + 1}`,
-          color: line.color,
-          type: 'metro',
-        });
-
-        // 反向列車：往起點站
-        const revProg = (((1 - baseProg - i / trainsPerDir) % 1) + 1) % 1;
-        const revPos = interpolateAlongPath(polyline, revProg);
-        const revNextIdx = Math.max(0, revPos.segmentIndex);
-        vehicleMarkers.push({
-          id: `metro-train-rev-${line.code}-${i}`,
-          lat: revPos.lat,
-          lng: revPos.lng,
-          title: `${line.name} 列車 ${line.code}0${i * 2 + 2}`,
-          subtitle: `往 ${line.terminals[0]} · 下一站：${stationsWithCoord[revNextIdx]?.name || ''}`,
-          badgeText: `← ${line.code}0${i * 2 + 2}`,
-          color: line.color,
-          type: 'metro',
-        });
-      }
-    }
+    const vehicleMarkers: MapMarker[] = (detail?.liveVehicles || []).map((v) => ({
+      id: v.id,
+      lat: v.lat,
+      lng: v.lng,
+      title: v.title,
+      subtitle: v.subtitle,
+      badgeText: v.label,
+      color: v.color || line.color,
+      type: 'metro',
+    }));
 
     return {
       polyline,
       markers: [...stopMarkers, ...vehicleMarkers],
       vehicleCount: vehicleMarkers.length,
     };
-  }, [systemId, selectedLineCode, stationId, detail, animTick]);
+  }, [systemId, selectedLineCode, stationId, detail]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-5">
