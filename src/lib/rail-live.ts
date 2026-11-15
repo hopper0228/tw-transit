@@ -1,4 +1,4 @@
-import { getMockMetroStation, getMockThsrTrains, getMockTraData, METRO_SYSTEMS } from './mock-data';
+import { METRO_SYSTEMS } from './mock-data';
 import { getMetroStationCoord, getThsrStationCoord, getTraStationCoord } from './rail-geo';
 import { fetchTdx, isTdxConfigured } from './tdx-client';
 import {
@@ -27,7 +27,24 @@ function getTaipeiNow() {
   const timeStr = `${parts.hour}:${parts.minute}:${parts.second}`;
   const minutesOfDay =
     Number(parts.hour) * 60 + Number(parts.minute) + Number(parts.second) / 60;
-  return { dateStr, timeStr, hhmm: `${parts.hour}:${parts.minute}`, minutesOfDay };
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Taipei',
+    weekday: 'long',
+  }).format(now) as
+    | 'Sunday'
+    | 'Monday'
+    | 'Tuesday'
+    | 'Wednesday'
+    | 'Thursday'
+    | 'Friday'
+    | 'Saturday';
+  return {
+    dateStr,
+    timeStr,
+    hhmm: `${parts.hour}:${parts.minute}`,
+    minutesOfDay,
+    weekday,
+  };
 }
 
 function parseHhmmToMinutes(hhmm: string): number {
@@ -51,6 +68,20 @@ interface TdxMetroLiveBoard {
   ServiceStatus?: number;
 }
 
+interface TdxMetroStationTimetable {
+  LineID?: string;
+  StationID: string;
+  Direction?: number;
+  DestinationStationID?: string;
+  DestinationStaionID?: string;
+  DestinationStationName?: { Zh_tw?: string };
+  ServiceDay?: Record<string, boolean | string>;
+  Timetables?: {
+    Sequence: number;
+    DepartureTime: string;
+  }[];
+}
+
 export async function getRealMetroStation(
   systemId: string,
   stationId: string
@@ -67,24 +98,64 @@ export async function getRealMetroStation(
     }
   }
 
-  const { timeStr } = getTaipeiNow();
+  const { timeStr, minutesOfDay, weekday } = getTaipeiNow();
+  const stations = matchedLine.stations;
+  const stationIdx = stations.findIndex((s) => s.id === matchedStation.id);
+  const isStartTerminal = stationIdx === 0;
+  const isEndTerminal = stationIdx === stations.length - 1;
+
+  const buildEmptyPlatforms = (): MetroPlatformArrival[] => {
+    const res: MetroPlatformArrival[] = [];
+    if (!isEndTerminal) {
+      res.push({
+        platformName: '第 1 月台',
+        destination: `往 ${matchedLine.terminals[1]}`,
+        nextTrainSeconds: -1,
+        followingTrainSeconds: 0,
+      });
+    }
+    if (!isStartTerminal) {
+      res.push({
+        platformName: isEndTerminal ? '第 1 月台' : '第 2 月台',
+        destination: `往 ${matchedLine.terminals[0]}`,
+        nextTrainSeconds: -1,
+        followingTrainSeconds: 0,
+      });
+    }
+    return res;
+  };
 
   if (!isTdxConfigured()) {
-    return getMockMetroStation(systemId, stationId);
+    return {
+      systemId: sys.id,
+      systemName: sys.name,
+      lineCode: matchedLine.code,
+      lineName: matchedLine.name,
+      lineColor: matchedLine.color,
+      stationId: matchedStation.id,
+      stationName: matchedStation.name,
+      platforms: buildEmptyPlatforms(),
+      liveVehicles: [],
+      updatedAt: timeStr,
+      source: 'tdx',
+    };
   }
 
   try {
-    const raw = await fetchTdx<TdxMetroLiveBoard[]>(
+    const liveRaw = await fetchTdx<TdxMetroLiveBoard[]>(
       `/v2/Rail/Metro/LiveBoard/${sys.id}?%24format=JSON`,
       25
-    );
-    const list = Array.isArray(raw) ? raw : [];
-    if (list.length === 0) {
-      return getMockMetroStation(systemId, stationId);
-    }
+    ).catch(() => [] as TdxMetroLiveBoard[]);
 
-    const stations = matchedLine.stations;
-    const stationIdx = stations.findIndex((s) => s.id === matchedStation.id);
+    const ttRaw = await fetchTdx<TdxMetroStationTimetable[]>(
+      `/v2/Rail/Metro/StationTimeTable/${sys.id}?%24filter=StationID%20eq%20%27${encodeURIComponent(
+        matchedStation.id
+      )}%27&%24format=JSON`,
+      3600
+    ).catch(() => [] as TdxMetroStationTimetable[]);
+
+    const list = Array.isArray(liveRaw) ? liveRaw : [];
+    const ttList = Array.isArray(ttRaw) ? ttRaw : [];
 
     // 1. 精準比對目前車站 (避免轉乘站混入其他路線月台)
     let stationRows = list.filter((r) => r.StationID === matchedStation.id);
@@ -96,30 +167,72 @@ export async function getRealMetroStation(
       );
     }
 
-    const resolveDir = (r: TdxMetroLiveBoard): 'fwd' | 'rev' | null => {
-      const destId = r.DestinationStationID;
-      const destName = r.DestinationStationName?.Zh_tw || r.TripHeadSign || '';
+    const resolveDirByDest = (
+      destId?: string,
+      destName?: string
+    ): 'fwd' | 'rev' | null => {
+      const name = destName || '';
       const dIdx = stations.findIndex(
-        (s) =>
-          (destId && s.id === destId) ||
-          (destName && destName.includes(s.name))
+        (s) => (destId && s.id === destId) || (name && name.includes(s.name))
       );
       if (dIdx >= 0 && stationIdx >= 0) {
         if (dIdx > stationIdx) return 'fwd';
         if (dIdx < stationIdx) return 'rev';
       }
-      if (destName.includes(matchedLine.terminals[1])) return 'fwd';
-      if (destName.includes(matchedLine.terminals[0])) return 'rev';
+      if (name.includes(matchedLine.terminals[1])) return 'fwd';
+      if (name.includes(matchedLine.terminals[0])) return 'rev';
       return null;
     };
 
     const fwdRows: TdxMetroLiveBoard[] = [];
     const revRows: TdxMetroLiveBoard[] = [];
     for (const row of stationRows) {
-      const dir = resolveDir(row);
+      const dir = resolveDirByDest(
+        row.DestinationStationID,
+        row.DestinationStationName?.Zh_tw || row.TripHeadSign
+      );
       if (dir === 'fwd') fwdRows.push(row);
       else if (dir === 'rev') revRows.push(row);
     }
+
+    const todayTables = ttList.filter(
+      (t) => !t.ServiceDay || t.ServiceDay[weekday] === true
+    );
+    const activeTables = todayTables.length > 0 ? todayTables : ttList;
+
+    const fwdSched: { sec: number; dest: string }[] = [];
+    const revSched: { sec: number; dest: string }[] = [];
+
+    for (const tb of activeTables) {
+      const destName = tb.DestinationStationName?.Zh_tw || '';
+      const destId = tb.DestinationStationID || tb.DestinationStaionID;
+      const dir = resolveDirByDest(destId, destName);
+      if (!dir) continue;
+      for (const item of tb.Timetables || []) {
+        let depMin = parseHhmmToMinutes(item.DepartureTime);
+        if (depMin < 180 && minutesOfDay > 1200) depMin += 1440;
+        const diffSec = Math.round((depMin - minutesOfDay) * 60);
+        if (diffSec >= 0 && diffSec <= 3600) {
+          const entry = { sec: diffSec, dest: destName };
+          if (dir === 'fwd') fwdSched.push(entry);
+          else revSched.push(entry);
+        }
+      }
+    }
+
+    const dedupeSched = (arr: { sec: number; dest: string }[]) => {
+      arr.sort((a, b) => a.sec - b.sec);
+      const out: { sec: number; dest: string }[] = [];
+      for (const item of arr) {
+        if (out.length === 0 || item.sec - out[out.length - 1].sec >= 60) {
+          out.push(item);
+        }
+      }
+      return out;
+    };
+
+    const fwdUpcoming = dedupeSched(fwdSched);
+    const revUpcoming = dedupeSched(revSched);
 
     const lineStationIds = new Set(stations.map((s) => s.id));
     const lineRows = list.filter(
@@ -129,74 +242,48 @@ export async function getRealMetroStation(
         r.LineNO === matchedLine.code
     );
 
-    // 若某方向剛好缺漏，從上游站點推算真實進站時間
     const buildPlatform = (
       platName: string,
       defaultDest: string,
-      rows: TdxMetroLiveBoard[],
-      dir: 'fwd' | 'rev'
+      liveRows: TdxMetroLiveBoard[],
+      sched: { sec: number; dest: string }[]
     ): MetroPlatformArrival => {
-      const valid = rows
+      const validLive = liveRows
         .filter((r) => typeof r.EstimateTime === 'number' && r.EstimateTime >= 0)
         .sort((a, b) => (a.EstimateTime ?? 99) - (b.EstimateTime ?? 99));
 
-      if (valid.length > 0) {
-        const firstMin = valid[0].EstimateTime!;
-        const secondMin = valid[1]?.EstimateTime;
+      if (validLive.length > 0) {
+        const firstMin = validLive[0].EstimateTime!;
+        const firstSec = firstMin <= 0 ? 20 : firstMin * 60;
         const specificDest =
-          valid[0].DestinationStationName?.Zh_tw || defaultDest;
+          validLive[0].DestinationStationName?.Zh_tw || defaultDest;
+
+        let secondSec = 0;
+        if (validLive[1]?.EstimateTime !== undefined) {
+          secondSec = validLive[1].EstimateTime * 60;
+        } else {
+          const nextSched = sched.find((s) => s.sec >= firstSec + 90);
+          if (nextSched) secondSec = nextSched.sec;
+        }
+
         return {
           platformName: platName,
           destination: specificDest.startsWith('往')
             ? specificDest
             : `往 ${specificDest}`,
-          nextTrainSeconds: firstMin <= 0 ? 20 : firstMin * 60,
-          followingTrainSeconds:
-            secondMin !== undefined && secondMin >= 0 ? secondMin * 60 : 0,
+          nextTrainSeconds: firstSec,
+          followingTrainSeconds: secondSec,
         };
       }
 
-      // 沿上游所有站點尋找真實行駛中且會經過本站的同向列車 (最多取最近 2 班)
-      const upstreamEstimates: { sec: number; dest: string }[] = [];
-      for (let hop = 1; hop < stations.length; hop++) {
-        const upIdx = dir === 'fwd' ? stationIdx - hop : stationIdx + hop;
-        if (upIdx < 0 || upIdx >= stations.length) break;
-        const upSt = stations[upIdx];
-        const upRow = lineRows.find((r) => {
-          if (r.StationID !== upSt.id) return false;
-          if (typeof r.EstimateTime !== 'number' || r.EstimateTime < 0) return false;
-          const destId = r.DestinationStationID;
-          const destName = r.DestinationStationName?.Zh_tw || r.TripHeadSign || '';
-          const dIdx = stations.findIndex(
-            (s) => (destId && s.id === destId) || (destName && destName.includes(s.name))
-          );
-          if (dIdx >= 0 && stationIdx >= 0) {
-            return dir === 'fwd' ? dIdx >= stationIdx : dIdx <= stationIdx;
-          }
-          return resolveDir(r) === dir;
-        });
-
-        if (upRow && upRow.EstimateTime !== undefined) {
-          const estSec = Math.max(60, (upRow.EstimateTime + hop * 2) * 60);
-          const specificDest =
-            upRow.DestinationStationName?.Zh_tw || defaultDest;
-          if (
-            upstreamEstimates.length === 0 ||
-            estSec - upstreamEstimates[upstreamEstimates.length - 1].sec >= 120
-          ) {
-            upstreamEstimates.push({ sec: estSec, dest: specificDest });
-          }
-          if (upstreamEstimates.length >= 2) break;
-        }
-      }
-
-      if (upstreamEstimates.length > 0) {
-        const first = upstreamEstimates[0];
-        const second = upstreamEstimates[1];
+      if (sched.length > 0) {
+        const first = sched[0];
+        const second = sched[1];
+        const dest = first.dest || defaultDest;
         return {
           platformName: platName,
-          destination: first.dest.startsWith('往') ? first.dest : `往 ${first.dest}`,
-          nextTrainSeconds: first.sec,
+          destination: dest.startsWith('往') ? dest : `往 ${dest}`,
+          nextTrainSeconds: Math.max(30, first.sec),
           followingTrainSeconds: second ? second.sec : 0,
         };
       }
@@ -210,12 +297,9 @@ export async function getRealMetroStation(
     };
 
     const platforms: MetroPlatformArrival[] = [];
-    const isStartTerminal = stationIdx === 0;
-    const isEndTerminal = stationIdx === stations.length - 1;
-
     if (!isEndTerminal) {
       platforms.push(
-        buildPlatform('第 1 月台', matchedLine.terminals[1], fwdRows, 'fwd')
+        buildPlatform('第 1 月台', matchedLine.terminals[1], fwdRows, fwdUpcoming)
       );
     }
     if (!isStartTerminal) {
@@ -224,7 +308,7 @@ export async function getRealMetroStation(
           isEndTerminal ? '第 1 月台' : '第 2 月台',
           matchedLine.terminals[0],
           revRows,
-          'rev'
+          revUpcoming
         )
       );
     }
@@ -300,8 +384,6 @@ export async function getRealMetroStation(
       }
     }
 
-    const fallbackMock = platforms.length === 0 ? getMockMetroStation(systemId, stationId) : null;
-
     return {
       systemId: sys.id,
       systemName: sys.name,
@@ -310,13 +392,25 @@ export async function getRealMetroStation(
       lineColor: matchedLine.color,
       stationId: matchedStation.id,
       stationName: matchedStation.name,
-      platforms: fallbackMock ? fallbackMock.platforms : platforms,
+      platforms,
       liveVehicles,
       updatedAt: timeStr,
       source: 'tdx',
     };
   } catch {
-    return getMockMetroStation(systemId, stationId);
+    return {
+      systemId: sys.id,
+      systemName: sys.name,
+      lineCode: matchedLine.code,
+      lineName: matchedLine.name,
+      lineColor: matchedLine.color,
+      stationId: matchedStation.id,
+      stationName: matchedStation.name,
+      platforms: buildEmptyPlatforms(),
+      liveVehicles: [],
+      updatedAt: timeStr,
+      source: 'tdx',
+    };
   }
 }
 
@@ -384,10 +478,10 @@ export async function getRealTraData(
 
   if (!isTdxConfigured()) {
     return {
-      trains: getMockTraData(mode, station, from, to),
+      trains: [],
       liveVehicles: [],
       updatedAt: timeStr,
-      source: 'mock',
+      source: 'tdx',
     };
   }
 
@@ -504,10 +598,10 @@ export async function getRealTraData(
     };
   } catch {
     return {
-      trains: getMockTraData(mode, station, from, to),
+      trains: [],
       liveVehicles: [],
       updatedAt: timeStr,
-      source: 'mock',
+      source: 'tdx',
     };
   }
 }
@@ -563,10 +657,10 @@ export async function getRealThsrData(
 
   if (!isTdxConfigured()) {
     return {
-      trains: getMockThsrTrains(from, to),
+      trains: [],
       liveVehicles: [],
       updatedAt: timeStr,
-      source: 'mock',
+      source: 'tdx',
     };
   }
 
@@ -673,10 +767,10 @@ export async function getRealThsrData(
     };
   } catch {
     return {
-      trains: getMockThsrTrains(from, to),
+      trains: [],
       liveVehicles: [],
       updatedAt: timeStr,
-      source: 'mock',
+      source: 'tdx',
     };
   }
 }
