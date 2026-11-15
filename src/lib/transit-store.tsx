@@ -131,10 +131,9 @@ export function TransitStoreProvider({
       ? findNearestMetroStation(coords.lat, coords.lng, METRO_SYSTEMS)
       : null;
     const mSys = nearestMetro?.systemId || 'TRTC';
-    const mSt = nearestMetro?.stationId || 'BL12';
     void fetchWithCache(
-      `metro:${mSys}:${mSt}`,
-      `/api/transit/metro?system=${encodeURIComponent(mSys)}&station=${encodeURIComponent(mSt)}`
+      `metro:snapshot:${mSys}`,
+      `/api/transit/metro?system=${encodeURIComponent(mSys)}&mode=snapshot`
     ).catch(() => {});
 
     // 第 2 批：錯峰預熱台鐵與高鐵索引

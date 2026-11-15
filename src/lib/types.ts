@@ -82,6 +82,16 @@ export interface MetroStationDetail {
   source: DataSourceMode;
 }
 
+export interface MetroSystemSnapshot {
+  systemId: 'TRTC' | 'NTMC' | 'TYMC' | 'TMRT' | 'KRTC' | 'KLRT';
+  systemName: string;
+  stations: Record<string, MetroStationDetail>;
+  liveVehiclesByLine: Record<string, LiveRailVehicle[]>;
+  updatedAt: string;
+  sourceUpdatedAt: number;
+  source: DataSourceMode;
+}
+
 export interface TraTrainRow {
   trainNo: string;
   trainType: '新自強' | '普悠瑪' | '太魯閣' | '自強' | '莒光' | '區間快' | '區間';

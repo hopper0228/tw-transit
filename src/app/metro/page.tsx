@@ -13,7 +13,7 @@ import {
   findNearestMetroStation,
   getMetroStationCoord,
 } from '@/lib/rail-geo';
-import { MetroStationDetail } from '@/lib/types';
+import { MetroStationDetail, MetroSystemSnapshot } from '@/lib/types';
 import { isFavorite, toggleFavorite } from '@/lib/favorites';
 
 const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
@@ -56,7 +56,7 @@ function MetroPageInner() {
     searchParams.get('station') || currentSys.lines[0].stations[11]?.id || currentSys.lines[0].stations[0].id
   );
   const [stationQuery, setStationQuery] = useState('');
-  const [detail, setDetail] = useState<MetroStationDetail | null>(null);
+  const [snapshot, setSnapshot] = useState<MetroSystemSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [faved, setFaved] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
@@ -85,27 +85,26 @@ function MetroPageInner() {
   const [fetchedAt, setFetchedAt] = useState<number>(0);
   const [frontendUpdatedAt, setFrontendUpdatedAt] = useState<string>('');
 
-  const loadStation = useCallback(
-    async (sys: string, st: string, signal?: AbortSignal, force = false) => {
-      const key = `metro:${sys}:${st}`;
-      const cached = getCached<MetroStationDetail>(key);
+  // 僅依 systemId 載入該捷運系統全線快照；切換路線與任意車站皆為純前端 0ms 過濾
+  const loadSystemSnapshot = useCallback(
+    async (sys: string, signal?: AbortSignal, force = false) => {
+      const key = `metro:snapshot:${sys}`;
+      const cached = getCached<MetroSystemSnapshot>(key);
       if (cached && !force) {
-        setDetail(cached.data);
+        setSnapshot(cached.data);
         setFetchedAt(cached.fetchedAt);
-        setFaved(isFavorite(`metro-${cached.data.systemId}-${cached.data.stationId}`));
         setLoading(false);
       } else {
         setLoading(true);
       }
       try {
-        const data = await fetchWithCache<MetroStationDetail>(
+        const data = await fetchWithCache<MetroSystemSnapshot>(
           key,
-          `/api/transit/metro?system=${encodeURIComponent(sys)}&station=${encodeURIComponent(st)}`,
+          `/api/transit/metro?system=${encodeURIComponent(sys)}&mode=snapshot`,
           { signal, force }
         );
-        setDetail(data);
+        setSnapshot(data);
         setFetchedAt(Date.now());
-        setFaved(isFavorite(`metro-${data.systemId}-${data.stationId}`));
       } catch {
         // ignore abort/network error
       } finally {
@@ -118,17 +117,35 @@ function MetroPageInner() {
   useEffect(() => {
     const controller = new AbortController();
     const t = setTimeout(() => {
-      void loadStation(systemId, stationId, controller.signal);
+      void loadSystemSnapshot(systemId, controller.signal);
     }, 0);
     return () => {
       clearTimeout(t);
       controller.abort();
     };
-  }, [systemId, stationId, loadStation]);
+  }, [systemId, loadSystemSnapshot]);
+
+  const detail: MetroStationDetail | null = useMemo(() => {
+    if (!snapshot || snapshot.systemId !== systemId) return null;
+    const st = snapshot.stations[stationId];
+    if (!st) return null;
+    return {
+      ...st,
+      liveVehicles: snapshot.liveVehiclesByLine[st.lineCode] || [],
+    };
+  }, [snapshot, systemId, stationId]);
+
+  useEffect(() => {
+    if (!detail) return;
+    const t = setTimeout(() => {
+      setFaved(isFavorite(`metro-${detail.systemId}-${detail.stationId}`));
+    }, 0);
+    return () => clearTimeout(t);
+  }, [detail]);
 
   const handleBackgroundRefresh = useCallback(() => {
-    void loadStation(systemId, stationId, undefined, true);
-  }, [systemId, stationId, loadStation]);
+    void loadSystemSnapshot(systemId, undefined, true);
+  }, [systemId, loadSystemSnapshot]);
 
   const handleManualFrontendRefresh = useCallback(() => {
     setFrontendUpdatedAt(triggerFrontendRefresh());
