@@ -19,6 +19,21 @@ interface CacheEntry<T> {
 
 let cachedToken: CachedToken | null = null;
 const responseCache = new Map<string, CacheEntry<unknown>>();
+const MAX_TDX_CACHE_ENTRIES = 200;
+
+function cleanupTdxCache() {
+  const now = Date.now();
+  for (const [k, v] of responseCache.entries()) {
+    if (v.expiresAt <= now) {
+      responseCache.delete(k);
+    }
+  }
+  while (responseCache.size >= MAX_TDX_CACHE_ENTRIES) {
+    const oldestKey = responseCache.keys().next().value;
+    if (!oldestKey) break;
+    responseCache.delete(oldestKey);
+  }
+}
 
 export function isTdxConfigured(): boolean {
   const id = process.env.TDX_CLIENT_ID?.trim();
@@ -90,6 +105,7 @@ export async function fetchTdx<T>(path: string, ttlSeconds = 15): Promise<T> {
   }
 
   const data = (await res.json()) as T;
+  cleanupTdxCache();
   responseCache.set(path, {
     data,
     expiresAt: now + ttlSeconds * 1000,

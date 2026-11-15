@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 
 export interface MapMarker {
@@ -23,6 +23,29 @@ interface LeafletMapProps {
   heightClass?: string;
 }
 
+type TileStyleId = 'voyager' | 'nlsc' | 'dark';
+
+const TILE_STYLES: Record<
+  TileStyleId,
+  { label: string; url: string; attribution: string }
+> = {
+  voyager: {
+    label: '現代極簡',
+    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+  },
+  nlsc: {
+    label: '台灣圖資',
+    url: 'https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}',
+    attribution: '&copy; 內政部國土測繪中心',
+  },
+  dark: {
+    label: '深色',
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+  },
+};
+
 export default function LeafletMap({
   center = [25.0468, 121.5171],
   zoom = 13,
@@ -33,7 +56,9 @@ export default function LeafletMap({
 }: LeafletMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
   const layerGroupRef = useRef<L.LayerGroup | null>(null);
+  const [tileStyle, setTileStyle] = useState<TileStyleId>('voyager');
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -44,24 +69,42 @@ export default function LeafletMap({
       zoomControl: true,
     });
 
-    // 使用 OpenStreetMap 圖資 (免費無金鑰限制)
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
+    const cfg = TILE_STYLES.voyager;
+    const tile = L.tileLayer(cfg.url, {
+      attribution: cfg.attribution,
       maxZoom: 19,
     }).addTo(map);
 
     const group = L.layerGroup().addTo(map);
     mapRef.current = map;
+    tileLayerRef.current = tile;
     layerGroupRef.current = group;
 
     return () => {
       map.remove();
       mapRef.current = null;
+      tileLayerRef.current = null;
       layerGroupRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 切換地圖圖資風格
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current);
+    }
+    const cfg = TILE_STYLES[tileStyle];
+    tileLayerRef.current = L.tileLayer(cfg.url, {
+      attribution: cfg.attribution,
+      maxZoom: 19,
+    }).addTo(map);
+  }, [tileStyle]);
+
+  // 更新路線與標記 (BBox 上限保護，避免同時繪製過多 DOM 節點)
   useEffect(() => {
     const map = mapRef.current;
     const group = layerGroupRef.current;
@@ -73,7 +116,7 @@ export default function LeafletMap({
       const line = L.polyline(polyline, {
         color: polylineColor,
         weight: 4,
-        opacity: 0.8,
+        opacity: 0.85,
       }).addTo(group);
       map.fitBounds(line.getBounds(), { padding: [30, 30] });
     } else if (markers.length > 0) {
@@ -83,7 +126,8 @@ export default function LeafletMap({
       }
     }
 
-    markers.forEach((m) => {
+    const limitedMarkers = markers.slice(0, 120);
+    limitedMarkers.forEach((m) => {
       if (m.type === 'bus') {
         const icon = L.divIcon({
           className: 'custom-bus-marker',
@@ -120,9 +164,29 @@ export default function LeafletMap({
   }, [polyline, polylineColor, markers]);
 
   return (
-    <div
-      ref={containerRef}
-      className={`w-full overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 ${heightClass}`}
-    />
+    <div className="relative">
+      <div
+        ref={containerRef}
+        className={`w-full overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 ${heightClass}`}
+      />
+
+      {/* 右上角圖資風格切換器 (免費類 Google Map 風格 / 台灣官方圖資 / 深色) */}
+      <div className="absolute right-3 top-3 z-[400] flex gap-1 rounded-xl border border-slate-200/90 bg-white/95 p-1 shadow-sm backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/95">
+        {(Object.keys(TILE_STYLES) as TileStyleId[]).map((id) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTileStyle(id)}
+            className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
+              tileStyle === id
+                ? 'bg-blue-600 text-white shadow-2xs'
+                : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+            }`}
+          >
+            {TILE_STYLES[id].label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

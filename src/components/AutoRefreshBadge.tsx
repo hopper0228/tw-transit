@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, RefreshCw } from 'lucide-react';
 
 interface AutoRefreshBadgeProps {
-  /** 每幾秒自動更新一次，預設 10 秒 */
+  /** 每幾秒自動更新一次，預設 15 秒 */
   intervalSeconds?: number;
   /** 觸發資料更新的回呼函式 */
   onRefresh: () => void;
@@ -25,18 +25,38 @@ export default function AutoRefreshBadge({
 
   const onRefreshRef = useRef(onRefresh);
   const prevRefreshingRef = useRef(isRefreshing);
+  const hiddenAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     onRefreshRef.current = onRefresh;
   }, [onRefresh]);
 
-  // 獨立的每秒倒數計時器：不直接在 setState updater 內呼叫外部 setState
+  // 獨立的每秒倒數計時器：分頁隱藏時自動暫停，切回時若超過間隔則立即更新
   useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAtRef.current = Date.now();
+      } else if (hiddenAtRef.current !== null) {
+        const elapsedSec = (Date.now() - hiddenAtRef.current) / 1000;
+        hiddenAtRef.current = null;
+        if (elapsedSec >= intervalSeconds) {
+          setCountdown(0);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     const timer = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
       setCountdown((prev) => (prev <= 1 ? 0 : prev - 1));
     }, 1000);
-    return () => clearInterval(timer);
-  }, []);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [intervalSeconds]);
 
   // 當 countdown 歸零時觸發更新並重設倒數
   useEffect(() => {
@@ -78,7 +98,7 @@ export default function AutoRefreshBadge({
     <button
       type="button"
       onClick={handleManualClick}
-      title="點擊立即更新資料"
+      title="點擊立即更新資料（分頁背景時自動暫停輪詢）"
       className={`group relative overflow-hidden rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all ${
         justUpdated
           ? 'border-emerald-300 bg-emerald-50 text-emerald-700 shadow-xs dark:border-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
