@@ -140,13 +140,117 @@ async function getMetroSystemTables(
   return byStation;
 }
 
+interface TdxMetroFrequency {
+  LineID?: string;
+  LineNo?: string;
+  ServiceDay?: Record<string, boolean | string>;
+  OperationTime?: { StartTime?: string; EndTime?: string };
+  Headways?: {
+    StartTime: string;
+    EndTime: string;
+    MinHeadwayMins: number;
+    MaxHeadwayMins: number;
+  }[];
+}
+
+const metroFrequencyCache = new Map<
+  string,
+  { expiresAt: number; list: TdxMetroFrequency[] }
+>();
+
+async function getMetroSystemFrequencies(
+  sysId: string
+): Promise<TdxMetroFrequency[]> {
+  const now = Date.now();
+  const cached = metroFrequencyCache.get(sysId);
+  if (cached && cached.expiresAt > now) {
+    return cached.list;
+  }
+
+  const raw = await fetchTdx<TdxMetroFrequency[]>(
+    `/v2/Rail/Metro/Frequency/${sysId}?%24format=JSON`,
+    21600
+  ).catch(() => [] as TdxMetroFrequency[]);
+
+  const list = Array.isArray(raw) ? raw : [];
+  if (list.length > 0) {
+    metroFrequencyCache.set(sysId, {
+      expiresAt: now + 6 * 3600 * 1000,
+      list,
+    });
+  }
+  return list;
+}
+
+function getLineHeadwayMins(
+  freqList: TdxMetroFrequency[],
+  lineCode: string,
+  weekday: string,
+  minutesOfDay: number
+): { minMins: number; maxMins: number } | null {
+  const lineFreqs = freqList.filter(
+    (f) => f.LineID === lineCode || f.LineNo === lineCode
+  );
+  if (lineFreqs.length === 0) return null;
+
+  const todayFreqs = lineFreqs.filter(
+    (f) => !f.ServiceDay || f.ServiceDay[weekday] === true
+  );
+  const candidates = todayFreqs.length > 0 ? todayFreqs : lineFreqs;
+
+  for (const freq of candidates) {
+    const opStart = parseHhmmToMinutes(freq.OperationTime?.StartTime || '06:00');
+    let opEnd = parseHhmmToMinutes(freq.OperationTime?.EndTime || '24:00');
+    if (opEnd <= opStart) opEnd += 1440;
+    const adjNow = minutesOfDay < 180 ? minutesOfDay + 1440 : minutesOfDay;
+    if (adjNow < opStart || adjNow > opEnd) continue;
+
+    for (const hw of freq.Headways || []) {
+      const s = parseHhmmToMinutes(hw.StartTime);
+      let e = parseHhmmToMinutes(hw.EndTime);
+      if (e <= s) e += 1440;
+      if (adjNow >= s && adjNow <= e) {
+        return {
+          minMins: Math.max(1, hw.MinHeadwayMins || 4),
+          maxMins: Math.max(1, hw.MaxHeadwayMins || hw.MinHeadwayMins || 8),
+        };
+      }
+    }
+  }
+  return null;
+}
+
+const BRANCH_END_TERMINALS = new Set(['R22A', 'G03A', 'O54', 'O21', 'V11', 'V26']);
+const LOOP_METRO_LINES = new Set(['C']);
+
+function resolveTerminalFlags(
+  lineCode: string,
+  stationId: string,
+  stationIdx: number,
+  stationCount: number
+) {
+  if (LOOP_METRO_LINES.has(lineCode)) {
+    return { isStartTerminal: false, isEndTerminal: false };
+  }
+  const isStartTerminal = stationIdx === 0;
+  const isEndTerminal =
+    stationIdx === stationCount - 1 || BRANCH_END_TERMINALS.has(stationId);
+  return { isStartTerminal, isEndTerminal };
+}
+
 function buildEmptyMetroPlatforms(
+  lineCode: string,
+  stationId: string,
   terminals: [string, string],
   stationIdx: number,
   stationCount: number
 ): MetroPlatformArrival[] {
-  const isStartTerminal = stationIdx === 0;
-  const isEndTerminal = stationIdx === stationCount - 1;
+  const { isStartTerminal, isEndTerminal } = resolveTerminalFlags(
+    lineCode,
+    stationId,
+    stationIdx,
+    stationCount
+  );
   const res: MetroPlatformArrival[] = [];
   if (!isEndTerminal) {
     res.push({
@@ -253,21 +357,51 @@ function buildMetroLineVehicles(
 
 function buildMetroStationPlatforms(
   line: (typeof METRO_SYSTEMS)[number]['lines'][number],
+  stationId: string,
   stationIdx: number,
   stationRows: TdxMetroLiveBoard[],
   ttList: CompactMetroTable[],
   minutesOfDay: number,
-  weekday: string
+  weekday: string,
+  snapshotCreatedAt: number,
+  headway: { minMins: number; maxMins: number } | null
 ): MetroPlatformArrival[] {
   const stations = line.stations;
-  const isStartTerminal = stationIdx === 0;
-  const isEndTerminal = stationIdx === stations.length - 1;
+  const { isStartTerminal, isEndTerminal } = resolveTerminalFlags(
+    line.code,
+    stationId,
+    stationIdx,
+    stations.length
+  );
 
   const resolveDirByDest = (
     destId?: string,
     destName?: string
   ): 'fwd' | 'rev' | null => {
     const name = destName || '';
+    // 信義線東延段 R01 廣慈/奉天宮 位於 R02 象山以東（index -1），屬往象山方向
+    if (line.code === 'R' && (destId === 'R01' || name.includes('廣慈'))) {
+      return 'rev';
+    }
+    if (line.code === 'R' && stationId === 'R22A' && (destId === 'R22' || name.includes('北投'))) {
+      return 'rev';
+    }
+    if (line.code === 'G' && stationId === 'G03A' && (destId === 'G03' || name.includes('七張'))) {
+      return 'rev';
+    }
+    if (line.code === 'O') {
+      if (name.includes('南勢角') || destId === 'O01') return 'rev';
+      if (name.includes('迴龍') || name.includes('蘆洲') || destId === 'O21' || destId === 'O54') {
+        return 'fwd';
+      }
+    }
+    if (line.code === 'V') {
+      if (name.includes('紅樹林') || destId === 'V01') return 'rev';
+      if (name.includes('崁頂') || name.includes('漁人碼頭') || destId === 'V11' || destId === 'V26') {
+        return 'fwd';
+      }
+    }
+
     const dIdx = stations.findIndex(
       (s) => (destId && s.id === destId) || (name && name.includes(s.name))
     );
@@ -340,17 +474,40 @@ function buildMetroStationPlatforms(
       .sort((a, b) => (a.EstimateTime ?? 99) - (b.EstimateTime ?? 99));
 
     if (validLive.length > 0) {
-      const firstMin = validLive[0].EstimateTime!;
-      const firstSec = firstMin <= 0 ? 20 : firstMin * 60;
+      const firstRow = validLive[0];
+      const firstAgeSec = Math.max(
+        0,
+        Math.round(
+          (snapshotCreatedAt -
+            parseSourceTimeMs(firstRow.SrcUpdateTime || firstRow.UpdateTime)) /
+            1000
+        )
+      );
+      const firstMin = firstRow.EstimateTime!;
+      const rawFirstSec = firstMin <= 0 ? 25 : firstMin * 60;
+      const firstSec = Math.max(10, rawFirstSec - firstAgeSec);
       const specificDest =
-        validLive[0].DestinationStationName?.Zh_tw || defaultDest;
+        firstRow.DestinationStationName?.Zh_tw || defaultDest;
 
       let secondSec = 0;
       if (validLive[1]?.EstimateTime !== undefined) {
-        secondSec = validLive[1].EstimateTime * 60;
+        const secondRow = validLive[1];
+        const secondAgeSec = Math.max(
+          0,
+          Math.round(
+            (snapshotCreatedAt -
+              parseSourceTimeMs(secondRow.SrcUpdateTime || secondRow.UpdateTime)) /
+              1000
+          )
+        );
+        secondSec = Math.max(
+          firstSec + 60,
+          secondRow.EstimateTime! * 60 - secondAgeSec
+        );
       } else {
         const nextSched = sched.find((s) => s.sec >= firstSec + 90);
         if (nextSched) secondSec = nextSched.sec;
+        else if (headway) secondSec = firstSec + headway.minMins * 60;
       }
 
       return {
@@ -370,8 +527,18 @@ function buildMetroStationPlatforms(
       return {
         platformName: platName,
         destination: dest.startsWith('往') ? dest : `往 ${dest}`,
-        nextTrainSeconds: Math.max(30, first.sec),
+        nextTrainSeconds: Math.max(15, first.sec),
         followingTrainSeconds: second ? second.sec : 0,
+      };
+    }
+
+    // 中運量或無站點時刻表路線（如文湖線 BR）於營運時段改用 TDX 官方班距
+    if (headway) {
+      return {
+        platformName: platName,
+        destination: defaultDest.startsWith('往') ? defaultDest : `往 ${defaultDest}`,
+        nextTrainSeconds: headway.minMins * 60,
+        followingTrainSeconds: (headway.minMins + headway.maxMins) * 60,
       };
     }
 
@@ -383,6 +550,13 @@ function buildMetroStationPlatforms(
     };
   };
 
+  const defaultRevDest =
+    stationId === 'R22A'
+      ? '北投'
+      : stationId === 'G03A'
+        ? '七張'
+        : line.terminals[0];
+
   const platforms: MetroPlatformArrival[] = [];
   if (!isEndTerminal) {
     platforms.push(
@@ -393,7 +567,7 @@ function buildMetroStationPlatforms(
     platforms.push(
       buildPlatform(
         isEndTerminal ? '第 1 月台' : '第 2 月台',
-        line.terminals[0],
+        defaultRevDest,
         revRows,
         revUpcoming
       )
@@ -409,6 +583,7 @@ export async function getRealMetroSystemSnapshot(
   systemId: string
 ): Promise<MetroSystemSnapshot> {
   const sys = METRO_SYSTEMS.find((s) => s.id === systemId) || METRO_SYSTEMS[0];
+  const snapshotCreatedAt = Date.now();
   const { timeStr, minutesOfDay, weekday } = getTaipeiNow();
 
   const buildEmptySnapshot = (sourceUpdatedAt: number): MetroSystemSnapshot => {
@@ -425,7 +600,13 @@ export async function getRealMetroSystemSnapshot(
           lineColor: line.color,
           stationId: st.id,
           stationName: st.name,
-          platforms: buildEmptyMetroPlatforms(line.terminals, idx, line.stations.length),
+          platforms: buildEmptyMetroPlatforms(
+            line.code,
+            st.id,
+            line.terminals,
+            idx,
+            line.stations.length
+          ),
           updatedAt: timeStr,
           sourceUpdatedAt,
           source: 'tdx',
@@ -444,16 +625,17 @@ export async function getRealMetroSystemSnapshot(
   };
 
   if (!isTdxConfigured()) {
-    return buildEmptySnapshot(Date.now());
+    return buildEmptySnapshot(snapshotCreatedAt);
   }
 
   try {
-    const [liveRaw, byStationTables] = await Promise.all([
+    const [liveRaw, byStationTables, freqList] = await Promise.all([
       fetchTdx<TdxMetroLiveBoard[]>(
         `/v2/Rail/Metro/LiveBoard/${sys.id}?%24format=JSON`,
         15
       ).catch(() => [] as TdxMetroLiveBoard[]),
       getMetroSystemTables(sys.id),
+      getMetroSystemFrequencies(sys.id),
     ]);
 
     const list = Array.isArray(liveRaw) ? liveRaw : [];
@@ -476,10 +658,8 @@ export async function getRealMetroSystemSnapshot(
       }
     }
 
-    const firstLive = list[0];
-    const sourceUpdatedAt = parseSourceTimeMs(
-      firstLive?.SrcUpdateTime || firstLive?.UpdateTime
-    );
+    // 所有剩餘秒數皆已對齊快照建立時刻 snapshotCreatedAt，避免前端重複扣減 LiveBoard 延遲
+    const sourceUpdatedAt = snapshotCreatedAt;
 
     const stations: Record<string, MetroStationDetail> = {};
     const liveVehiclesByLine: Record<string, LiveRailVehicle[]> = {};
@@ -491,6 +671,7 @@ export async function getRealMetroSystemSnapshot(
         line,
         list
       );
+      const headway = getLineHeadwayMins(freqList, line.code, weekday, minutesOfDay);
       line.stations.forEach((st, idx) => {
         const stationRows =
           rowsByStationId.get(st.id) ??
@@ -499,11 +680,14 @@ export async function getRealMetroSystemSnapshot(
         const ttList = byStationTables.get(st.id) || [];
         const platforms = buildMetroStationPlatforms(
           line,
+          st.id,
           idx,
           stationRows,
           ttList,
           minutesOfDay,
-          weekday
+          weekday,
+          snapshotCreatedAt,
+          headway
         );
         stations[st.id] = {
           systemId: sys.id,

@@ -451,7 +451,7 @@ function MetroPageInner() {
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {detail.platforms.map((plat) => {
-              const baseTs = detail.sourceUpdatedAt || fetchedAt;
+              const baseTs = fetchedAt || detail.sourceUpdatedAt || 0;
               const offsetSec =
                 nowMs > 0 && baseTs > 0
                   ? Math.max(0, Math.floor((nowMs - baseTs) / 1000))
