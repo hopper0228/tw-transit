@@ -469,6 +469,7 @@ interface TdxTraTrainLive {
 }
 
 interface TdxTraStationBoard {
+  StationID?: string;
   TrainNo: string;
   Direction: number;
   TrainTypeName?: { Zh_tw?: string };
@@ -478,20 +479,150 @@ interface TdxTraStationBoard {
   DelayTime?: number;
 }
 
-interface TdxTraOdTimetable {
+interface TdxTraDailyTimetableItem {
   TrainInfo: {
     TrainNo: string;
     Direction: number;
     TrainTypeName?: { Zh_tw?: string };
     StartingStationName?: { Zh_tw?: string };
     EndingStationName?: { Zh_tw?: string };
+    SuspendedFlag?: number;
   };
   StopTimes: {
+    StopSequence: number;
     StationID: string;
     StationName?: { Zh_tw?: string };
     ArrivalTime: string;
     DepartureTime: string;
+    SuspendedFlag?: number;
   }[];
+}
+
+interface CompactTraBoardStop {
+  trainNo: string;
+  trainType: TraTrainRow['trainType'];
+  direction: 0 | 1;
+  originStation: string;
+  destinationStation: string;
+  departureTime: string;
+  arrivalTime: string;
+}
+
+interface CompactTraTrain {
+  trainNo: string;
+  trainType: TraTrainRow['trainType'];
+  direction: 0 | 1;
+  stops: {
+    stationId: string;
+    stationName: string;
+    arrivalTime: string;
+    departureTime: string;
+  }[];
+}
+
+interface TraDailyIndex {
+  dateStr: string;
+  expiresAt: number;
+  byStation: Map<string, CompactTraBoardStop[]>;
+  trains: CompactTraTrain[];
+}
+
+let traDailyIndexCache: TraDailyIndex | null = null;
+let traDailyInFlight: Promise<TraDailyIndex | null> | null = null;
+
+async function getTraDailyIndex(dateStr: string): Promise<TraDailyIndex | null> {
+  if (
+    traDailyIndexCache &&
+    traDailyIndexCache.dateStr === dateStr &&
+    Date.now() < traDailyIndexCache.expiresAt
+  ) {
+    return traDailyIndexCache;
+  }
+
+  if (traDailyInFlight) return traDailyInFlight;
+
+  traDailyInFlight = (async () => {
+    try {
+      const res = await fetchTdx<{
+        TrainDate?: string;
+        TrainTimetables?: TdxTraDailyTimetableItem[];
+      }>('/v3/Rail/TRA/DailyTrainTimetable/Today?%24format=JSON', 14400);
+
+      const list = Array.isArray(res?.TrainTimetables) ? res.TrainTimetables : [];
+      if (list.length === 0) return traDailyIndexCache;
+
+      const byStation = new Map<string, CompactTraBoardStop[]>();
+      const trains: CompactTraTrain[] = [];
+
+      for (const item of list) {
+        if (item.TrainInfo?.SuspendedFlag === 1) continue;
+        const rawStops = Array.isArray(item.StopTimes) ? item.StopTimes : [];
+        const activeStops = rawStops.filter((s) => s.SuspendedFlag !== 1);
+        if (activeStops.length === 0) continue;
+
+        const trainNo = item.TrainInfo.TrainNo;
+        const trainType = normalizeTraType(item.TrainInfo.TrainTypeName?.Zh_tw);
+        const direction: 0 | 1 = item.TrainInfo.Direction === 1 ? 1 : 0;
+        const originStation =
+          item.TrainInfo.StartingStationName?.Zh_tw ||
+          activeStops[0]?.StationName?.Zh_tw ||
+          '';
+        const destinationStation =
+          item.TrainInfo.EndingStationName?.Zh_tw ||
+          activeStops[activeStops.length - 1]?.StationName?.Zh_tw ||
+          '終點站';
+
+        trains.push({
+          trainNo,
+          trainType,
+          direction,
+          stops: activeStops.map((s) => ({
+            stationId: s.StationID,
+            stationName: s.StationName?.Zh_tw || s.StationID,
+            arrivalTime: (s.ArrivalTime || '--:--').slice(0, 5),
+            departureTime: (s.DepartureTime || s.ArrivalTime || '--:--').slice(0, 5),
+          })),
+        });
+
+        for (const s of activeStops) {
+          const dep = (s.DepartureTime || s.ArrivalTime || '--:--').slice(0, 5);
+          const arr = (s.ArrivalTime || s.DepartureTime || '--:--').slice(0, 5);
+          let arrList = byStation.get(s.StationID);
+          if (!arrList) {
+            arrList = [];
+            byStation.set(s.StationID, arrList);
+          }
+          arrList.push({
+            trainNo,
+            trainType,
+            direction,
+            originStation,
+            destinationStation,
+            departureTime: dep,
+            arrivalTime: arr,
+          });
+        }
+      }
+
+      for (const arrList of byStation.values()) {
+        arrList.sort((a, b) => a.departureTime.localeCompare(b.departureTime));
+      }
+
+      traDailyIndexCache = {
+        dateStr: res?.TrainDate || dateStr,
+        expiresAt: Date.now() + 4 * 60 * 60 * 1000,
+        byStation,
+        trains,
+      };
+      return traDailyIndexCache;
+    } catch {
+      return traDailyIndexCache;
+    } finally {
+      traDailyInFlight = null;
+    }
+  })();
+
+  return traDailyInFlight;
 }
 
 function normalizeTraType(raw?: string): TraTrainRow['trainType'] {
@@ -527,125 +658,151 @@ export async function getRealTraData(
     };
   }
 
-  try {
-    const liveRes = await fetchTdx<{ TrainLiveBoards?: TdxTraTrainLive[] }>(
+  const [liveRes, boardRes, dailyIndex] = await Promise.allSettled([
+    fetchTdx<{ TrainLiveBoards?: TdxTraTrainLive[] }>(
       '/v3/Rail/TRA/TrainLiveBoard?%24format=JSON',
       25
-    );
-    const liveList = Array.isArray(liveRes?.TrainLiveBoards)
-      ? liveRes.TrainLiveBoards
+    ),
+    fetchTdx<{ StationLiveBoards?: TdxTraStationBoard[] }>(
+      '/v3/Rail/TRA/StationLiveBoard?%24format=JSON',
+      25
+    ),
+    getTraDailyIndex(dateStr),
+  ]);
+
+  const liveList =
+    liveRes.status === 'fulfilled' && Array.isArray(liveRes.value?.TrainLiveBoards)
+      ? liveRes.value.TrainLiveBoards
       : [];
+  const stationBoardAll =
+    boardRes.status === 'fulfilled' && Array.isArray(boardRes.value?.StationLiveBoards)
+      ? boardRes.value.StationLiveBoards
+      : [];
+  const index = dailyIndex.status === 'fulfilled' ? dailyIndex.value : null;
 
-    const delayMap = new Map<string, number>();
-    const liveVehicles: LiveRailVehicle[] = [];
+  const delayMap = new Map<string, number>();
+  const liveVehicles: LiveRailVehicle[] = [];
 
-    for (const item of liveList) {
-      delayMap.set(item.TrainNo, item.DelayTime ?? 0);
-      const coord = getTraStationCoord(item.StationID);
-      if (!coord) continue;
-      const tType = normalizeTraType(item.TrainTypeName?.Zh_tw);
-      const delay = item.DelayTime ?? 0;
-      const statusLabel =
-        item.TrainStationStatus === 0
-          ? '進站中'
-          : item.TrainStationStatus === 1
-            ? '停靠中'
-            : '已離站行駛中';
-      const color =
-        tType === '新自強' || tType === '普悠瑪' || tType === '太魯閣'
-          ? '#e11d48'
-          : tType === '自強'
-            ? '#f97316'
-            : '#4f46e5';
+  for (const item of liveList) {
+    delayMap.set(item.TrainNo, item.DelayTime ?? 0);
+    const coord = getTraStationCoord(item.StationID);
+    if (!coord) continue;
+    const tType = normalizeTraType(item.TrainTypeName?.Zh_tw);
+    const delay = item.DelayTime ?? 0;
+    const statusLabel =
+      item.TrainStationStatus === 0
+        ? '進站中'
+        : item.TrainStationStatus === 1
+          ? '停靠中'
+          : '已離站行駛中';
+    const color =
+      tType === '新自強' || tType === '普悠瑪' || tType === '太魯閣'
+        ? '#e11d48'
+        : tType === '自強'
+          ? '#f97316'
+          : '#4f46e5';
 
-      liveVehicles.push({
-        id: `tra-live-${item.TrainNo}`,
-        label: `${tType} ${item.TrainNo}`,
-        title: `台鐵 ${tType} ${item.TrainNo} 次`,
-        subtitle: `目前位置：${item.StationName?.Zh_tw || item.StationID} (${statusLabel})<br/>${
-          delay > 0 ? `晚 ${delay} 分鐘` : '準點'
-        }`,
-        lat: coord[0],
-        lng: coord[1],
-        color,
-      });
+    liveVehicles.push({
+      id: `tra-live-${item.TrainNo}`,
+      label: `${tType} ${item.TrainNo}`,
+      title: `台鐵 ${tType} ${item.TrainNo} 次`,
+      subtitle: `目前位置：${item.StationName?.Zh_tw || item.StationID} (${statusLabel})<br/>${
+        delay > 0 ? `晚 ${delay} 分鐘` : '準點'
+      }`,
+      lat: coord[0],
+      lng: coord[1],
+      color,
+    });
+  }
+
+  for (const sb of stationBoardAll) {
+    if (sb.DelayTime !== undefined && !delayMap.has(sb.TrainNo)) {
+      delayMap.set(sb.TrainNo, sb.DelayTime);
     }
+  }
 
-    let trains: TraTrainRow[] = [];
+  let trains: TraTrainRow[] = [];
 
-    if (mode === 'board') {
-      const boardRes = await fetchTdx<{ StationLiveBoards?: TdxTraStationBoard[] }>(
-        `/v3/Rail/TRA/StationLiveBoard/Station/${encodeURIComponent(station)}?%24format=JSON`,
-        25
-      );
-      const rows = Array.isArray(boardRes?.StationLiveBoards)
-        ? boardRes.StationLiveBoards
-        : [];
-      trains = rows.map((r) => {
-        const delay = r.DelayTime ?? delayMap.get(r.TrainNo) ?? 0;
+  if (mode === 'board') {
+    const stationSchedules = index?.byStation.get(station) ?? [];
+    const pickDir = (dir: 0 | 1): TraTrainRow[] => {
+      const dirAll = stationSchedules.filter((s) => s.direction === dir);
+      const upcoming = dirAll.filter((s) => s.departureTime >= hhmm);
+      const chosen = (upcoming.length > 0 ? upcoming : dirAll).slice(0, 12);
+      return chosen.map((s) => {
+        const delay = delayMap.get(s.trainNo) ?? 0;
         return {
-          trainNo: r.TrainNo,
-          trainType: normalizeTraType(r.TrainTypeName?.Zh_tw),
-          direction: r.Direction === 1 ? 1 : 0,
-          originStation: '',
-          destinationStation: r.EndingStationName?.Zh_tw || '終點站',
-          departureTime: (r.ScheduleDepartureTime || r.ScheduleArrivalTime || '--:--').slice(0, 5),
-          arrivalTime: (r.ScheduleArrivalTime || '--:--').slice(0, 5),
+          trainNo: s.trainNo,
+          trainType: s.trainType,
+          direction: s.direction,
+          originStation: s.originStation,
+          destinationStation: s.destinationStation,
+          departureTime: s.departureTime,
+          arrivalTime: s.arrivalTime,
           durationMinutes: 0,
           delayMinutes: delay,
           statusText: delay > 0 ? `晚 ${delay} 分` : '準點',
         };
       });
-    } else {
-      const odRes = await fetchTdx<{ TrainTimetables?: TdxTraOdTimetable[] }>(
-        `/v3/Rail/TRA/DailyTrainTimetable/OD/${encodeURIComponent(from)}/to/${encodeURIComponent(to)}/${dateStr}?%24format=JSON`,
-        300
-      );
-      const rows = Array.isArray(odRes?.TrainTimetables) ? odRes.TrainTimetables : [];
-      const mapped = rows
-        .map((r): TraTrainRow | null => {
-          const s0 = r.StopTimes[0];
-          const s1 = r.StopTimes[r.StopTimes.length - 1];
-          if (!s0 || !s1) return null;
-          const dep = s0.DepartureTime.slice(0, 5);
-          const arr = s1.ArrivalTime.slice(0, 5);
-          let dur = parseHhmmToMinutes(arr) - parseHhmmToMinutes(dep);
-          if (dur < 0) dur += 1440;
-          const delay = delayMap.get(r.TrainInfo.TrainNo) ?? 0;
+    };
+
+    trains = [...pickDir(0), ...pickDir(1)];
+
+    if (trains.length === 0) {
+      trains = stationBoardAll
+        .filter((r) => !r.StationID || r.StationID === station)
+        .map((r) => {
+          const delay = r.DelayTime ?? delayMap.get(r.TrainNo) ?? 0;
           return {
-            trainNo: r.TrainInfo.TrainNo,
-            trainType: normalizeTraType(r.TrainInfo.TrainTypeName?.Zh_tw),
-            direction: (r.TrainInfo.Direction === 1 ? 1 : 0) as 0 | 1,
-            originStation: s0.StationName?.Zh_tw || '',
-            destinationStation: s1.StationName?.Zh_tw || '',
-            departureTime: dep,
-            arrivalTime: arr,
-            durationMinutes: dur,
+            trainNo: r.TrainNo,
+            trainType: normalizeTraType(r.TrainTypeName?.Zh_tw),
+            direction: (r.Direction === 1 ? 1 : 0) as 0 | 1,
+            originStation: '',
+            destinationStation: r.EndingStationName?.Zh_tw || '終點站',
+            departureTime: (r.ScheduleDepartureTime || r.ScheduleArrivalTime || '--:--').slice(0, 5),
+            arrivalTime: (r.ScheduleArrivalTime || '--:--').slice(0, 5),
+            durationMinutes: 0,
             delayMinutes: delay,
             statusText: delay > 0 ? `晚 ${delay} 分` : '準點',
           };
-        })
-        .filter((x): x is TraTrainRow => x !== null)
-        .sort((a, b) => a.departureTime.localeCompare(b.departureTime));
-
-      const upcoming = mapped.filter((t) => t.departureTime >= hhmm);
-      trains = (upcoming.length > 0 ? upcoming : mapped).slice(0, 20);
+        });
     }
-
-    return {
-      trains,
-      liveVehicles: liveVehicles.slice(0, 55),
-      updatedAt: timeStr,
-      source: 'tdx',
-    };
-  } catch {
-    return {
-      trains: [],
-      liveVehicles: [],
-      updatedAt: timeStr,
-      source: 'tdx',
-    };
+  } else if (index) {
+    const mapped: TraTrainRow[] = [];
+    for (const tr of index.trains) {
+      const fromIdx = tr.stops.findIndex((s) => s.stationId === from);
+      if (fromIdx === -1) continue;
+      const toIdx = tr.stops.findIndex((s, i) => i > fromIdx && s.stationId === to);
+      if (toIdx === -1) continue;
+      const s0 = tr.stops[fromIdx];
+      const s1 = tr.stops[toIdx];
+      let dur = parseHhmmToMinutes(s1.arrivalTime) - parseHhmmToMinutes(s0.departureTime);
+      if (dur < 0) dur += 1440;
+      const delay = delayMap.get(tr.trainNo) ?? 0;
+      mapped.push({
+        trainNo: tr.trainNo,
+        trainType: tr.trainType,
+        direction: tr.direction,
+        originStation: s0.stationName,
+        destinationStation: s1.stationName,
+        departureTime: s0.departureTime,
+        arrivalTime: s1.arrivalTime,
+        durationMinutes: dur,
+        delayMinutes: delay,
+        statusText: delay > 0 ? `晚 ${delay} 分` : '準點',
+      });
+    }
+    mapped.sort((a, b) => a.departureTime.localeCompare(b.departureTime));
+    const upcoming = mapped.filter((t) => t.departureTime >= hhmm);
+    trains = (upcoming.length > 0 ? upcoming : mapped).slice(0, 20);
   }
+
+  return {
+    trains,
+    liveVehicles,
+    updatedAt: timeStr,
+    source: 'tdx',
+  };
 }
 
 // ==========================================
