@@ -1,12 +1,22 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useState } from 'react';
-import { Search, Star, TramFront } from 'lucide-react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { List, Map as MapIcon, Search, Star, TramFront } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
+import type { MapMarker } from '@/components/LeafletMap';
 import { METRO_SYSTEMS } from '@/lib/mock-data';
+import { getMetroStationCoord, interpolateAlongPath } from '@/lib/rail-geo';
 import { MetroStationDetail } from '@/lib/types';
 import { isFavorite, toggleFavorite } from '@/lib/favorites';
+
+const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[460px] w-full animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />
+  ),
+});
 
 function formatCountdown(sec: number) {
   if (sec <= 30) return '進站中';
@@ -44,6 +54,16 @@ function MetroPageInner() {
   const [detail, setDetail] = useState<MetroStationDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [faved, setFaved] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
+  const [animTick, setAnimTick] = useState(() => Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    if (viewMode !== 'map') return;
+    const timer = setInterval(() => {
+      setAnimTick(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [viewMode]);
 
   const loadStation = useCallback(async (sys: string, st: string) => {
     try {
@@ -117,16 +137,122 @@ function MetroPageInner() {
         lineCode: currentLine.code,
       }));
 
+  const metroMapData = useMemo(() => {
+    const sys = METRO_SYSTEMS.find((s) => s.id === systemId) || METRO_SYSTEMS[0];
+    const line = sys.lines.find((l) => l.code === selectedLineCode) || sys.lines[0];
+
+    const stationsWithCoord = line.stations
+      .map((st) => {
+        const coord = getMetroStationCoord(systemId, st.id);
+        return coord ? { ...st, lat: coord[0], lng: coord[1] } : null;
+      })
+      .filter((x): x is { id: string; name: string; lat: number; lng: number } => x !== null);
+
+    const polyline: [number, number][] = stationsWithCoord.map((s) => [s.lat, s.lng]);
+
+    const stopMarkers: MapMarker[] = stationsWithCoord.map((st, idx) => {
+      const isSelected = st.id === stationId;
+      let subtitle = `${sys.name} · ${line.name}（第 ${idx + 1}/${stationsWithCoord.length} 站）`;
+      if (isSelected && detail) {
+        const platSummary = detail.platforms
+          .map((p) => `${p.destination}: ${formatCountdown(p.nextTrainSeconds)}`)
+          .join(' | ');
+        subtitle = `目前查詢站點<br/>${platSummary}`;
+      }
+      return {
+        id: `metro-st-${st.id}`,
+        lat: st.lat,
+        lng: st.lng,
+        title: `${st.id} ${st.name}站`,
+        subtitle,
+        color: isSelected ? '#dc2626' : line.color,
+        type: 'stop',
+      };
+    });
+
+    const vehicleMarkers: MapMarker[] = [];
+    if (polyline.length >= 2) {
+      const cycleSec = Math.max(120, stationsWithCoord.length * 14);
+      const baseProg = (animTick % cycleSec) / cycleSec;
+      const trainsPerDir = 3;
+
+      for (let i = 0; i < trainsPerDir; i++) {
+        // 正向列車：往終點站
+        const fwdProg = (baseProg + i / trainsPerDir) % 1;
+        const fwdPos = interpolateAlongPath(polyline, fwdProg);
+        const fwdNextIdx = Math.min(stationsWithCoord.length - 1, fwdPos.segmentIndex + 1);
+        vehicleMarkers.push({
+          id: `metro-train-fwd-${line.code}-${i}`,
+          lat: fwdPos.lat,
+          lng: fwdPos.lng,
+          title: `${line.name} 列車 ${line.code}0${i * 2 + 1}`,
+          subtitle: `往 ${line.terminals[1]} · 下一站：${stationsWithCoord[fwdNextIdx]?.name || ''}`,
+          badgeText: `→ ${line.code}0${i * 2 + 1}`,
+          color: line.color,
+          type: 'metro',
+        });
+
+        // 反向列車：往起點站
+        const revProg = (((1 - baseProg - i / trainsPerDir) % 1) + 1) % 1;
+        const revPos = interpolateAlongPath(polyline, revProg);
+        const revNextIdx = Math.max(0, revPos.segmentIndex);
+        vehicleMarkers.push({
+          id: `metro-train-rev-${line.code}-${i}`,
+          lat: revPos.lat,
+          lng: revPos.lng,
+          title: `${line.name} 列車 ${line.code}0${i * 2 + 2}`,
+          subtitle: `往 ${line.terminals[0]} · 下一站：${stationsWithCoord[revNextIdx]?.name || ''}`,
+          badgeText: `← ${line.code}0${i * 2 + 2}`,
+          color: line.color,
+          type: 'metro',
+        });
+      }
+    }
+
+    return {
+      polyline,
+      markers: [...stopMarkers, ...vehicleMarkers],
+      vehicleCount: vehicleMarkers.length,
+    };
+  }, [systemId, selectedLineCode, stationId, detail, animTick]);
+
   return (
     <div className="mx-auto max-w-4xl space-y-5">
-      <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-white">
-          <TramFront className="h-6 w-6 text-teal-600" />
-          捷運 / 輕軌即時查詢
-        </h1>
-        <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-          涵蓋北捷、新北捷（環狀/輕軌）、機捷、中捷、高捷與高雄輕軌全部站點
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-white">
+            <TramFront className="h-6 w-6 text-teal-600" />
+            捷運 / 輕軌即時查詢
+          </h1>
+          <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+            涵蓋北捷、新北捷（環狀/輕軌）、機捷、中捷、高捷與高雄輕軌全部站點
+          </p>
+        </div>
+
+        <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+          <button
+            onClick={() => setViewMode('list')}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              viewMode === 'list'
+                ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <List className="h-3.5 w-3.5" />
+            站點動態
+          </button>
+          <button
+            onClick={() => setViewMode('map')}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              viewMode === 'map'
+                ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <MapIcon className="h-3.5 w-3.5" />
+            路線地圖
+          </button>
+        </div>
       </div>
 
       {/* 1. 捷運系統切換 */}
@@ -263,7 +389,20 @@ function MetroPageInner() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {viewMode === 'map' ? (
+            <div className="space-y-2.5">
+              <LeafletMap
+                polyline={metroMapData.polyline}
+                polylineColor={currentLine.color}
+                markers={metroMapData.markers}
+                heightClass="h-[480px]"
+              />
+              <p className="text-center text-xs text-slate-500">
+                {currentSys.name} {currentLine.name} · 地圖即時顯示 {metroMapData.vehicleCount} 列雙向行駛中列車與沿線 {metroMapData.polyline.length} 站詳細資訊
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {detail.platforms.map((plat) => (
               <div
                 key={plat.platformName}
@@ -325,7 +464,8 @@ function MetroPageInner() {
                 )}
               </div>
             ))}
-          </div>
+            </div>
+          )}
         </div>
       )}
     </div>

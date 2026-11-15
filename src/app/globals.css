@@ -29,3 +29,19 @@ body {
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+@keyframes transit-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.55), 0 2px 6px rgba(0, 0, 0, 0.3);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(37, 99, 235, 0), 0 2px 6px rgba(0, 0, 0, 0.3);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0), 0 2px 6px rgba(0, 0, 0, 0.3);
+  }
+}
+
+.transit-vehicle-pill {
+  animation: transit-pulse 2s infinite;
+}

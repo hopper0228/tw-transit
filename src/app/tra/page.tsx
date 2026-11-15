@@ -1,11 +1,21 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useState } from 'react';
-import { ArrowLeftRight, TrainFront } from 'lucide-react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowLeftRight, List, Map as MapIcon, TrainFront } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
+import type { MapMarker } from '@/components/LeafletMap';
 import { TRA_STATIONS } from '@/lib/mock-data';
+import { getTraStationCoord, interpolateAlongPath } from '@/lib/rail-geo';
 import { TraTrainRow } from '@/lib/types';
+
+const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[500px] w-full animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />
+  ),
+});
 
 const POPULAR_TRA_IDS = ['1000', '1020', '1080', '1210', '3300', '4080', '4220', '4400', '7000', '6000'];
 
@@ -35,6 +45,16 @@ function TraPageInner() {
   const [trains, setTrains] = useState<TraTrainRow[]>([]);
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
+  const [animTick, setAnimTick] = useState(() => Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    if (viewMode !== 'map') return;
+    const timer = setInterval(() => {
+      setAnimTick(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [viewMode]);
 
   const loadTra = useCallback(async () => {
     try {
@@ -70,6 +90,78 @@ function TraPageInner() {
     setTo(from);
   };
 
+  const traMapData = useMemo(() => {
+    const stationsWithCoord = TRA_STATIONS.map((s) => {
+      const coord = getTraStationCoord(s.id);
+      return coord ? { ...s, lat: coord[0], lng: coord[1] } : null;
+    }).filter((x): x is { id: string; name: string; lat: number; lng: number } => x !== null);
+
+    const polyline: [number, number][] = stationsWithCoord.map((s) => [s.lat, s.lng]);
+
+    const stopMarkers: MapMarker[] = stationsWithCoord.map((st) => {
+      const isSelected =
+        mode === 'board' ? st.id === station : st.id === from || st.id === to;
+      let subtitle = `台鐵車站代碼 ${st.id}`;
+      if (isSelected && trains.length > 0) {
+        const preview = trains
+          .slice(0, 2)
+          .map((t) => `${t.trainType} ${t.trainNo} (${t.departureTime} · ${t.statusText})`)
+          .join('<br/>');
+        subtitle = `目前查詢重點站<br/>${preview}`;
+      }
+      return {
+        id: `tra-st-${st.id}`,
+        lat: st.lat,
+        lng: st.lng,
+        title: `台鐵 ${st.name}站`,
+        subtitle,
+        color: isSelected ? '#dc2626' : '#4f46e5',
+        type: 'stop',
+      };
+    });
+
+    const activeList = trains.slice(0, 8);
+    const vehicleMarkers: MapMarker[] = [];
+    if (polyline.length >= 2 && activeList.length > 0) {
+      const cycleSec = 240;
+      const baseProg = (animTick % cycleSec) / cycleSec;
+      activeList.forEach((t, idx) => {
+        const isReverse = idx % 2 === 1;
+        const offset = idx / activeList.length;
+        const prog = isReverse
+          ? (((1 - baseProg - offset) % 1) + 1) % 1
+          : (baseProg + offset) % 1;
+        const pos = interpolateAlongPath(polyline, prog);
+        const nextIdx = isReverse
+          ? Math.max(0, pos.segmentIndex)
+          : Math.min(stationsWithCoord.length - 1, pos.segmentIndex + 1);
+        const color =
+          t.trainType === '新自強' || t.trainType === '普悠瑪' || t.trainType === '太魯閣'
+            ? '#e11d48'
+            : t.trainType === '自強'
+              ? '#f97316'
+              : '#4f46e5';
+
+        vehicleMarkers.push({
+          id: `tra-train-${t.trainNo}-${idx}`,
+          lat: pos.lat,
+          lng: pos.lng,
+          title: `${t.trainType} ${t.trainNo} 次`,
+          subtitle: `往 ${t.destinationStation} · ${t.statusText}<br/>接近：${stationsWithCoord[nextIdx]?.name || ''}`,
+          badgeText: `${t.trainType} ${t.trainNo}`,
+          color,
+          type: 'tra',
+        });
+      });
+    }
+
+    return {
+      polyline,
+      markers: [...stopMarkers, ...vehicleMarkers],
+      vehicleCount: vehicleMarkers.length,
+    };
+  }, [mode, station, from, to, trains, animTick]);
+
   return (
     <div className="mx-auto max-w-4xl space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -83,28 +175,56 @@ function TraPageInner() {
           </p>
         </div>
 
-        {/* 雙分頁切換 */}
-        <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
-          <button
-            onClick={() => setMode('board')}
-            className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition ${
-              mode === 'board'
-                ? 'bg-white text-indigo-600 shadow-xs dark:bg-slate-900 dark:text-indigo-400'
-                : 'text-slate-500 hover:text-slate-800 dark:text-slate-400'
-            }`}
-          >
-            車站即時看板
-          </button>
-          <button
-            onClick={() => setMode('od')}
-            className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition ${
-              mode === 'od'
-                ? 'bg-white text-indigo-600 shadow-xs dark:bg-slate-900 dark:text-indigo-400'
-                : 'text-slate-500 hover:text-slate-800 dark:text-slate-400'
-            }`}
-          >
-            起訖點時刻表
-          </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* 列表 / 地圖切換 */}
+          <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+            <button
+              onClick={() => setViewMode('list')}
+              className={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                viewMode === 'list'
+                  ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <List className="h-3.5 w-3.5" />
+              列表
+            </button>
+            <button
+              onClick={() => setViewMode('map')}
+              className={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                viewMode === 'map'
+                  ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <MapIcon className="h-3.5 w-3.5" />
+              地圖
+            </button>
+          </div>
+
+          {/* 雙分頁切換 */}
+          <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+            <button
+              onClick={() => setMode('board')}
+              className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition ${
+                mode === 'board'
+                  ? 'bg-white text-indigo-600 shadow-xs dark:bg-slate-900 dark:text-indigo-400'
+                  : 'text-slate-500 hover:text-slate-800 dark:text-slate-400'
+              }`}
+            >
+              車站即時看板
+            </button>
+            <button
+              onClick={() => setMode('od')}
+              className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition ${
+                mode === 'od'
+                  ? 'bg-white text-indigo-600 shadow-xs dark:bg-slate-900 dark:text-indigo-400'
+                  : 'text-slate-500 hover:text-slate-800 dark:text-slate-400'
+              }`}
+            >
+              起訖點時刻表
+            </button>
+          </div>
         </div>
       </div>
 
@@ -192,8 +312,20 @@ function TraPageInner() {
         )}
       </div>
 
-      {/* 列車列表 */}
-      {mode === 'board' ? (
+      {/* 地圖模式 / 列車列表 */}
+      {viewMode === 'map' ? (
+        <div className="space-y-2.5">
+          <LeafletMap
+            polyline={traMapData.polyline}
+            polylineColor="#4f46e5"
+            markers={traMapData.markers}
+            heightClass="h-[520px]"
+          />
+          <p className="text-center text-xs text-slate-500">
+            台鐵環島幹線 · 地圖即時顯示 {traMapData.vehicleCount} 班行駛中列車與 {TRA_STATIONS.length} 個主要車站資訊
+          </p>
+        </div>
+      ) : mode === 'board' ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {[
             { dir: 0, title: '順行 (南下 / 東部)' },

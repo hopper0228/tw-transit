@@ -4,6 +4,15 @@ import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { LocateFixed } from 'lucide-react';
 
+export type MapMarkerType =
+  | 'stop'
+  | 'bus'
+  | 'metro'
+  | 'tra'
+  | 'thsr'
+  | 'youbike'
+  | 'parking';
+
 export interface MapMarker {
   id: string;
   lat: number;
@@ -12,7 +21,37 @@ export interface MapMarker {
   subtitle?: string;
   badgeText?: string;
   color?: string;
-  type?: 'stop' | 'bus' | 'youbike' | 'parking';
+  type?: MapMarkerType;
+}
+
+const VEHICLE_META: Record<
+  'bus' | 'metro' | 'tra' | 'thsr',
+  { emoji: string; defaultColor: string; fallbackLabel: string }
+> = {
+  bus: { emoji: '🚌', defaultColor: '#dc2626', fallbackLabel: '公車' },
+  metro: { emoji: '🚇', defaultColor: '#0284c7', fallbackLabel: '捷運' },
+  tra: { emoji: '🚆', defaultColor: '#4f46e5', fallbackLabel: '台鐵' },
+  thsr: { emoji: '🚄', defaultColor: '#ea580c', fallbackLabel: '高鐵' },
+};
+
+function isVehicleType(t?: MapMarkerType): t is 'bus' | 'metro' | 'tra' | 'thsr' {
+  return t === 'bus' || t === 'metro' || t === 'tra' || t === 'thsr';
+}
+
+function buildVehicleHtml(m: MapMarker, type: 'bus' | 'metro' | 'tra' | 'thsr'): string {
+  const meta = VEHICLE_META[type];
+  const bg = m.color || meta.defaultColor;
+  const label = m.badgeText || meta.fallbackLabel;
+  return `<div class="transit-vehicle-pill" style="background:${bg};color:#fff;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap;border:2px solid #fff;display:inline-flex;align-items:center;gap:3px;"><span>${meta.emoji}</span><span>${label}</span></div>`;
+}
+
+interface VehicleAnimState {
+  marker: L.Marker;
+  from: [number, number];
+  to: [number, number];
+  startTime: number;
+  duration: number;
+  html: string;
 }
 
 export interface MapBounds {
@@ -44,8 +83,12 @@ export default function LeafletMap({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layerGroupRef = useRef<L.LayerGroup | null>(null);
+  const vehicleLayerRef = useRef<L.LayerGroup | null>(null);
   const userLayerRef = useRef<L.LayerGroup | null>(null);
+  const vehicleStateRef = useRef<Map<string, VehicleAnimState>>(new Map());
+  const animFrameRef = useRef<number | null>(null);
   const hasFittedBoundsRef = useRef(false);
+  const lastPolylineKeyRef = useRef<string>('');
   const onBoundsChangeRef = useRef(onBoundsChange);
   const suppressNextMoveRef = useRef(false);
 
@@ -72,9 +115,11 @@ export default function LeafletMap({
     }).addTo(map);
 
     const group = L.layerGroup().addTo(map);
+    const vehicleGroup = L.layerGroup().addTo(map);
     const userGroup = L.layerGroup().addTo(map);
     mapRef.current = map;
     layerGroupRef.current = group;
+    vehicleLayerRef.current = vehicleGroup;
     userLayerRef.current = userGroup;
     hasFittedBoundsRef.current = false;
 
@@ -99,22 +144,40 @@ export default function LeafletMap({
 
     map.on('moveend', handleMoveEnd);
 
+    const vehicleStates = vehicleStateRef.current;
+
     return () => {
       if (debounceTimer) clearTimeout(debounceTimer);
+      if (animFrameRef.current !== null) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+      vehicleStates.clear();
       map.off('moveend', handleMoveEnd);
       map.remove();
       mapRef.current = null;
       layerGroupRef.current = null;
+      vehicleLayerRef.current = null;
       userLayerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 更新路線與標記 (僅在初次有資料時自動縮放，避免 15 秒刷新時拉走使用者手動縮放或定位的視角)
+  // 更新靜態路線與站點標記 (切換路線時才重新縮放，避免輪詢刷新拉走使用者視角)
   useEffect(() => {
     const map = mapRef.current;
     const group = layerGroupRef.current;
-    if (!map || !group) return;
+    const vehicleGroup = vehicleLayerRef.current;
+    if (!map || !group || !vehicleGroup) return;
+
+    const polylineKey =
+      polyline && polyline.length > 1
+        ? `${polyline.length}:${polyline[0][0].toFixed(4)},${polyline[0][1].toFixed(4)}:${polyline[polyline.length - 1][0].toFixed(4)}`
+        : '';
+    if (polylineKey && polylineKey !== lastPolylineKeyRef.current) {
+      hasFittedBoundsRef.current = false;
+      lastPolylineKeyRef.current = polylineKey;
+    }
 
     group.clearLayers();
 
@@ -138,19 +201,18 @@ export default function LeafletMap({
       }
     }
 
-    const limitedMarkers = markers.slice(0, 120);
-    limitedMarkers.forEach((m) => {
-      if (m.type === 'bus') {
-        const icon = L.divIcon({
-          className: 'custom-bus-marker',
-          html: `<div style="background:#dc2626;color:#fff;padding:3px 7px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">🚌 ${m.badgeText || '公車'}</div>`,
-          iconSize: [70, 24],
-          iconAnchor: [35, 12],
-        });
-        L.marker([m.lat, m.lng], { icon })
-          .bindPopup(`<strong>${m.title}</strong><br/>${m.subtitle || ''}`)
-          .addTo(group);
-      } else if (m.type === 'youbike' || m.type === 'parking') {
+    const staticMarkers: MapMarker[] = [];
+    const vehicleMarkers: MapMarker[] = [];
+    for (const m of markers) {
+      if (isVehicleType(m.type)) {
+        vehicleMarkers.push(m);
+      } else {
+        staticMarkers.push(m);
+      }
+    }
+
+    staticMarkers.slice(0, 120).forEach((m) => {
+      if (m.type === 'youbike' || m.type === 'parking') {
         const bg = m.color || (m.type === 'youbike' ? '#ca8a04' : '#4f46e5');
         const icon = L.divIcon({
           className: 'custom-poi-marker',
@@ -163,16 +225,101 @@ export default function LeafletMap({
           .addTo(group);
       } else {
         L.circleMarker([m.lat, m.lng], {
-          radius: 5,
-          color: polylineColor,
+          radius: 5.5,
+          color: m.color || polylineColor,
           fillColor: '#ffffff',
           fillOpacity: 1,
-          weight: 2,
+          weight: 2.5,
         })
-          .bindPopup(`<strong>${m.title}</strong><br/>${m.subtitle || ''}`)
+          .bindPopup(`<strong>${m.title}</strong>${m.subtitle ? `<br/>${m.subtitle}` : ''}`)
           .addTo(group);
       }
     });
+
+    // 平滑更新行駛中車輛標記 (保留現有 Marker 並以 requestAnimationFrame 補間移動)
+    const activeIds = new Set<string>();
+    const states = vehicleStateRef.current;
+    const now = performance.now();
+    let needsAnimation = false;
+
+    for (const m of vehicleMarkers.slice(0, 60)) {
+      if (!isVehicleType(m.type)) continue;
+      activeIds.add(m.id);
+      const html = buildVehicleHtml(m, m.type);
+      const popupHtml = `<strong>${m.title}</strong>${m.subtitle ? `<br/>${m.subtitle}` : ''}`;
+      const existing = states.get(m.id);
+
+      if (existing) {
+        const cur = existing.marker.getLatLng();
+        if (Math.abs(cur.lat - m.lat) > 1e-6 || Math.abs(cur.lng - m.lng) > 1e-6) {
+          existing.from = [cur.lat, cur.lng];
+          existing.to = [m.lat, m.lng];
+          existing.startTime = now;
+          existing.duration = m.type === 'bus' ? 2200 : 950;
+          needsAnimation = true;
+        }
+        if (existing.html !== html) {
+          existing.html = html;
+          existing.marker.setIcon(
+            L.divIcon({
+              className: 'custom-vehicle-marker',
+              html,
+              iconSize: [76, 26],
+              iconAnchor: [38, 13],
+            })
+          );
+        }
+        existing.marker.setPopupContent(popupHtml);
+      } else {
+        const icon = L.divIcon({
+          className: 'custom-vehicle-marker',
+          html,
+          iconSize: [76, 26],
+          iconAnchor: [38, 13],
+        });
+        const marker = L.marker([m.lat, m.lng], { icon, zIndexOffset: 600 })
+          .bindPopup(popupHtml)
+          .addTo(vehicleGroup);
+        states.set(m.id, {
+          marker,
+          from: [m.lat, m.lng],
+          to: [m.lat, m.lng],
+          startTime: now,
+          duration: 950,
+          html,
+        });
+      }
+    }
+
+    for (const [id, st] of states.entries()) {
+      if (!activeIds.has(id)) {
+        vehicleGroup.removeLayer(st.marker);
+        states.delete(id);
+      }
+    }
+
+    if (needsAnimation) {
+      if (animFrameRef.current !== null) {
+        cancelAnimationFrame(animFrameRef.current);
+      }
+      const step = (ts: number) => {
+        let anyActive = false;
+        for (const st of states.values()) {
+          const elapsed = ts - st.startTime;
+          const progress = Math.min(1, Math.max(0, elapsed / st.duration));
+          const lat = st.from[0] + (st.to[0] - st.from[0]) * progress;
+          const lng = st.from[1] + (st.to[1] - st.from[1]) * progress;
+          st.marker.setLatLng([lat, lng]);
+          if (progress < 1) anyActive = true;
+        }
+        if (anyActive) {
+          animFrameRef.current = requestAnimationFrame(step);
+        } else {
+          animFrameRef.current = null;
+        }
+      };
+      animFrameRef.current = requestAnimationFrame(step);
+    }
   }, [polyline, polylineColor, markers]);
 
   // 捕捉使用者現在位置 (瀏覽器 GPS Geolocation)

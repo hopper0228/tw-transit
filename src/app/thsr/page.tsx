@@ -1,11 +1,21 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useState } from 'react';
-import { ArrowLeftRight, Zap } from 'lucide-react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowLeftRight, List, Map as MapIcon, Zap } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
+import type { MapMarker } from '@/components/LeafletMap';
 import { THSR_STATIONS } from '@/lib/mock-data';
+import { getThsrStationCoord, interpolateAlongPath } from '@/lib/rail-geo';
 import { ThsrTrainRow } from '@/lib/types';
+
+const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[500px] w-full animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />
+  ),
+});
 
 function renderSeatBadge(status: ThsrTrainRow['standardSeatStatus']) {
   if (status === 'available') {
@@ -39,6 +49,16 @@ function ThsrPageInner() {
   const [trains, setTrains] = useState<ThsrTrainRow[]>([]);
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
+  const [animTick, setAnimTick] = useState(() => Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    if (viewMode !== 'map') return;
+    const timer = setInterval(() => {
+      setAnimTick(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [viewMode]);
 
   const loadThsr = useCallback(async () => {
     try {
@@ -65,16 +85,104 @@ function ThsrPageInner() {
     void loadThsr();
   }, [loadThsr]);
 
+  const thsrMapData = useMemo(() => {
+    const stationsWithCoord = THSR_STATIONS.map((s) => {
+      const coord = getThsrStationCoord(s.id);
+      return coord ? { ...s, lat: coord[0], lng: coord[1] } : null;
+    }).filter((x): x is { id: string; name: string; lat: number; lng: number } => x !== null);
+
+    const polyline: [number, number][] = stationsWithCoord.map((s) => [s.lat, s.lng]);
+
+    const stopMarkers: MapMarker[] = stationsWithCoord.map((st) => {
+      const isSelected = st.id === from || st.id === to;
+      return {
+        id: `thsr-st-${st.id}`,
+        lat: st.lat,
+        lng: st.lng,
+        title: `高鐵 ${st.name}站`,
+        subtitle:
+          st.id === from
+            ? '出發站 · 自由座/對號座進站中'
+            : st.id === to
+              ? '抵達站'
+              : `高鐵車站代碼 ${st.id}`,
+        color: isSelected ? '#dc2626' : '#ea580c',
+        type: 'stop',
+      };
+    });
+
+    const activeList = trains.slice(0, 6);
+    const vehicleMarkers: MapMarker[] = [];
+    if (polyline.length >= 2 && activeList.length > 0) {
+      const cycleSec = 180;
+      const baseProg = (animTick % cycleSec) / cycleSec;
+      activeList.forEach((t, idx) => {
+        const isNorthbound = idx % 2 === 1;
+        const offset = idx / activeList.length;
+        const prog = isNorthbound
+          ? (((1 - baseProg - offset) % 1) + 1) % 1
+          : (baseProg + offset) % 1;
+        const pos = interpolateAlongPath(polyline, prog);
+        const nextIdx = isNorthbound
+          ? Math.max(0, pos.segmentIndex)
+          : Math.min(stationsWithCoord.length - 1, pos.segmentIndex + 1);
+        vehicleMarkers.push({
+          id: `thsr-train-${t.trainNo}-${idx}`,
+          lat: pos.lat,
+          lng: pos.lng,
+          title: `高鐵 ${t.trainNo} 次 (${t.stopPattern})`,
+          subtitle: `${t.originStation} → ${t.destinationStation}<br/>下一站：${stationsWithCoord[nextIdx]?.name || ''} · 自由座 ${t.nonReservedCars}`,
+          badgeText: t.trainNo,
+          color: '#ea580c',
+          type: 'thsr',
+        });
+      });
+    }
+
+    return {
+      polyline,
+      markers: [...stopMarkers, ...vehicleMarkers],
+      vehicleCount: vehicleMarkers.length,
+    };
+  }, [from, to, trains, animTick]);
+
   return (
     <div className="mx-auto max-w-4xl space-y-5">
-      <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-white">
-          <Zap className="h-6 w-6 text-orange-600" />
-          台灣高鐵即時查詢
-        </h1>
-        <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-          車次時刻、停靠模式與即時剩餘座位燈號
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-white">
+            <Zap className="h-6 w-6 text-orange-600" />
+            台灣高鐵即時查詢
+          </h1>
+          <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+            車次時刻、停靠模式與即時剩餘座位燈號
+          </p>
+        </div>
+
+        <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+          <button
+            onClick={() => setViewMode('list')}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              viewMode === 'list'
+                ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <List className="h-3.5 w-3.5" />
+            時刻表
+          </button>
+          <button
+            onClick={() => setViewMode('map')}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              viewMode === 'map'
+                ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <MapIcon className="h-3.5 w-3.5" />
+            路線地圖
+          </button>
+        </div>
       </div>
 
       {/* 起訖站快速選擇器 */}
@@ -124,8 +232,21 @@ function ThsrPageInner() {
         </div>
       </div>
 
-      {/* 車次列表 */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-900">
+      {/* 地圖模式 / 車次列表 */}
+      {viewMode === 'map' ? (
+        <div className="space-y-2.5">
+          <LeafletMap
+            polyline={thsrMapData.polyline}
+            polylineColor="#ea580c"
+            markers={thsrMapData.markers}
+            heightClass="h-[520px]"
+          />
+          <p className="text-center text-xs text-slate-500">
+            台灣高鐵西部幹線 · 地圖即時顯示 {thsrMapData.vehicleCount} 班行駛中列車與全線 {THSR_STATIONS.length} 站資訊
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-900">
         <ul className="divide-y divide-slate-100 dark:divide-slate-800">
           {trains.map((t) => (
             <li
@@ -167,6 +288,7 @@ function ThsrPageInner() {
           ))}
         </ul>
       </div>
+      )}
     </div>
   );
 }
