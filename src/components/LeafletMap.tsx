@@ -15,6 +15,13 @@ export interface MapMarker {
   type?: 'stop' | 'bus' | 'youbike' | 'parking';
 }
 
+export interface MapBounds {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+}
+
 interface LeafletMapProps {
   center?: [number, number];
   zoom?: number;
@@ -22,6 +29,7 @@ interface LeafletMapProps {
   polylineColor?: string;
   markers?: MapMarker[];
   heightClass?: string;
+  onBoundsChange?: (bounds: MapBounds) => void;
 }
 
 export default function LeafletMap({
@@ -31,12 +39,19 @@ export default function LeafletMap({
   polylineColor = '#2563EB',
   markers = [],
   heightClass = 'h-[420px]',
+  onBoundsChange,
 }: LeafletMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layerGroupRef = useRef<L.LayerGroup | null>(null);
   const userLayerRef = useRef<L.LayerGroup | null>(null);
   const hasFittedBoundsRef = useRef(false);
+  const onBoundsChangeRef = useRef(onBoundsChange);
+  const suppressNextMoveRef = useRef(false);
+
+  useEffect(() => {
+    onBoundsChangeRef.current = onBoundsChange;
+  }, [onBoundsChange]);
 
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
@@ -63,7 +78,30 @@ export default function LeafletMap({
     userLayerRef.current = userGroup;
     hasFittedBoundsRef.current = false;
 
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const handleMoveEnd = () => {
+      if (suppressNextMoveRef.current) {
+        suppressNextMoveRef.current = false;
+        return;
+      }
+      if (!onBoundsChangeRef.current) return;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const b = map.getBounds();
+        onBoundsChangeRef.current?.({
+          north: b.getNorth(),
+          south: b.getSouth(),
+          east: b.getEast(),
+          west: b.getWest(),
+        });
+      }, 280);
+    };
+
+    map.on('moveend', handleMoveEnd);
+
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      map.off('moveend', handleMoveEnd);
       map.remove();
       mapRef.current = null;
       layerGroupRef.current = null;
@@ -87,12 +125,14 @@ export default function LeafletMap({
         opacity: 0.85,
       }).addTo(group);
       if (!hasFittedBoundsRef.current) {
+        suppressNextMoveRef.current = true;
         map.fitBounds(line.getBounds(), { padding: [30, 30] });
         hasFittedBoundsRef.current = true;
       }
     } else if (markers.length > 0 && !hasFittedBoundsRef.current) {
       const bounds = L.latLngBounds(markers.map((m) => [m.lat, m.lng]));
       if (bounds.isValid()) {
+        suppressNextMoveRef.current = true;
         map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
         hasFittedBoundsRef.current = true;
       }

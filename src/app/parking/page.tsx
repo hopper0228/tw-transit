@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
 import { ParkingLot } from '@/lib/types';
-import type { MapMarker } from '@/components/LeafletMap';
+import type { MapBounds, MapMarker } from '@/components/LeafletMap';
 
 const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
   ssr: false,
@@ -39,25 +39,35 @@ function ParkingPageInner() {
   const [onlyAvailable, setOnlyAvailable] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [lots, setLots] = useState<ParkingLot[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
 
   const loadLots = useCallback(async () => {
     try {
-      const res = await fetch(
-        `/api/transit/parking?city=${encodeURIComponent(city)}&q=${encodeURIComponent(
-          query
-        )}&onlyAvailable=${onlyAvailable}`
-      );
+      const qs = new URLSearchParams({
+        city,
+        q: query,
+        onlyAvailable: String(onlyAvailable),
+      });
+      if (viewMode === 'map' && mapBounds) {
+        qs.set('north', String(mapBounds.north));
+        qs.set('south', String(mapBounds.south));
+        qs.set('east', String(mapBounds.east));
+        qs.set('west', String(mapBounds.west));
+      }
+      const res = await fetch(`/api/transit/parking?${qs.toString()}`);
       const data = await res.json();
       setLots(data.lots || []);
+      setTotalCount(data.total ?? (data.lots || []).length);
       setUpdatedAt(data.updatedAt || '');
     } catch {
       // ignore
     } finally {
       setLoading(false);
     }
-  }, [city, query, onlyAvailable]);
+  }, [city, query, onlyAvailable, viewMode, mapBounds]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -177,7 +187,16 @@ function ParkingPageInner() {
       </div>
 
       {viewMode === 'map' ? (
-        <LeafletMap markers={markers} heightClass="h-[500px]" />
+        <div className="space-y-2.5">
+          <LeafletMap
+            markers={markers}
+            heightClass="h-[500px]"
+            onBoundsChange={(b) => setMapBounds(b)}
+          />
+          <p className="text-center text-xs text-slate-500">
+            移動或縮放地圖即自動更新該範圍停車場 · 目前範圍顯示 {lots.length} 場（共符合 {totalCount} 場）
+          </p>
+        </div>
       ) : (
         <div className="space-y-3">
           {lots.map((lot) => {

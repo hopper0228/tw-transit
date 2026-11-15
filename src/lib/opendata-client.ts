@@ -510,9 +510,17 @@ interface CompactParkingMeta {
   parkingType: '立體' | '平面';
 }
 
+export interface GeoBounds {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+}
+
 export async function getRealTaipeiParkingLots(
   query?: string,
-  onlyAvailable = false
+  onlyAvailable = false,
+  bounds?: GeoBounds
 ): Promise<ParkingLot[]> {
   const [metas, availMap] = await Promise.all([
     fetchAndTransform<{ data: { park: TcmsvParkDesc[] } }, CompactParkingMeta[]>(
@@ -562,6 +570,17 @@ export async function getRealTaipeiParkingLots(
     if (avail === undefined) continue;
     if (onlyAvailable && avail === 0) continue;
 
+    if (bounds) {
+      if (
+        p.lat < bounds.south ||
+        p.lat > bounds.north ||
+        p.lng < bounds.west ||
+        p.lng > bounds.east
+      ) {
+        continue;
+      }
+    }
+
     if (
       q &&
       !p.name.toLowerCase().includes(q) &&
@@ -583,6 +602,18 @@ export async function getRealTaipeiParkingLots(
       parkingType: p.parkingType,
       updatedAt: '即時',
     });
+  }
+
+  // 若有地圖範圍，依距離地圖中心點由近到遠排序
+  if (bounds) {
+    const centerLat = (bounds.north + bounds.south) / 2;
+    const centerLng = (bounds.east + bounds.west) / 2;
+    lots.sort(
+      (a, b) =>
+        (a.lat - centerLat) ** 2 +
+        (a.lng - centerLng) ** 2 -
+        ((b.lat - centerLat) ** 2 + (b.lng - centerLng) ** 2)
+    );
   }
 
   return lots;
