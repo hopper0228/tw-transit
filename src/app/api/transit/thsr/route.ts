@@ -8,11 +8,14 @@ export async function GET(req: NextRequest) {
 
   const result = await getRealThsrData(from, to);
 
-  return NextResponse.json({
-    stations: THSR_STATIONS,
-    trains: result.trains,
-    liveVehicles: result.liveVehicles,
-    updatedAt: result.updatedAt,
-    source: result.source,
-  });
+  return NextResponse.json(
+    {
+      stations: THSR_STATIONS,
+      trains: result.trains,
+      liveVehicles: result.liveVehicles,
+      updatedAt: result.updatedAt,
+      source: result.source,
+    },
+    { headers: { 'Cache-Control': 'no-store, max-age=0' } }
+  );
 }

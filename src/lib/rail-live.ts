@@ -105,13 +105,15 @@ export async function getRealMetroStation(
       const sorted = [...rows].sort(
         (a, b) => (a.EstimateTime ?? 99) - (b.EstimateTime ?? 99)
       );
-      const firstMin = Math.max(0, sorted[0]?.EstimateTime ?? 2);
-      const secondMin = Math.max(firstMin + 3, sorted[1]?.EstimateTime ?? firstMin + 4);
+      const firstMin = sorted[0]?.EstimateTime;
+      const secondMin = sorted[1]?.EstimateTime;
+      if (firstMin === undefined) continue;
       platforms.push({
         platformName: `第 ${platIdx} 月台`,
         destination: dest.startsWith('往') ? dest : `往 ${dest}`,
-        nextTrainSeconds: firstMin === 0 ? 20 : firstMin * 60,
-        followingTrainSeconds: secondMin * 60,
+        nextTrainSeconds: firstMin <= 0 ? 20 : firstMin * 60,
+        followingTrainSeconds:
+          secondMin !== undefined && secondMin >= 0 ? secondMin * 60 : 0,
       });
       platIdx++;
     }
@@ -466,7 +468,7 @@ export async function getRealThsrData(
 
   try {
     const [daily, seatData] = await Promise.all([
-      fetchTdx<TdxThsrDaily[]>('/v2/Rail/THSR/DailyTimetable/Today?%24format=JSON', 900),
+      fetchTdx<TdxThsrDaily[]>('/v2/Rail/THSR/DailyTimetable/Today?%24format=JSON', 3600),
       fetchTdx<TdxThsrSeatList>(
         `/v2/Rail/THSR/AvailableSeatStatusList/${encodeURIComponent(from)}?%24format=JSON`,
         60

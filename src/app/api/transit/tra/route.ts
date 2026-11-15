@@ -10,11 +10,14 @@ export async function GET(req: NextRequest) {
 
   const result = await getRealTraData(mode, station, from, to);
 
-  return NextResponse.json({
-    stations: TRA_STATIONS,
-    trains: result.trains,
-    liveVehicles: result.liveVehicles,
-    updatedAt: result.updatedAt,
-    source: result.source,
-  });
+  return NextResponse.json(
+    {
+      stations: TRA_STATIONS,
+      trains: result.trains,
+      liveVehicles: result.liveVehicles,
+      updatedAt: result.updatedAt,
+      source: result.source,
+    },
+    { headers: { 'Cache-Control': 'no-store, max-age=0' } }
+  );
 }

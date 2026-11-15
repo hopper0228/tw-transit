@@ -79,13 +79,17 @@ function MetroPageInner() {
     }
   }, [ready, coords]);
 
+  const [elapsedSec, setElapsedSec] = useState(0);
+
   const loadStation = useCallback(async (sys: string, st: string) => {
     try {
       const res = await fetch(
-        `/api/transit/metro?system=${encodeURIComponent(sys)}&station=${encodeURIComponent(st)}`
+        `/api/transit/metro?system=${encodeURIComponent(sys)}&station=${encodeURIComponent(st)}`,
+        { cache: 'no-store' }
       );
       const data: MetroStationDetail = await res.json();
       setDetail(data);
+      setElapsedSec(0);
       setFaved(isFavorite(`metro-${data.systemId}-${data.stationId}`));
     } catch {
       // ignore error
@@ -93,6 +97,14 @@ function MetroPageInner() {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!detail) return;
+    const t = setInterval(() => {
+      setElapsedSec((prev) => (prev < 60 ? prev + 1 : prev));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [detail]);
 
   useEffect(() => {
     if (!ready) return;
@@ -400,7 +412,16 @@ function MetroPageInner() {
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {detail.platforms.map((plat) => (
+            {detail.platforms.map((plat) => {
+              const liveNext = Math.max(0, plat.nextTrainSeconds - elapsedSec);
+              const liveFollowing =
+                plat.followingTrainSeconds > 0
+                  ? Math.max(0, plat.followingTrainSeconds - elapsedSec)
+                  : 0;
+              const destLabel = plat.destination.startsWith('往')
+                ? plat.destination
+                : `往 ${plat.destination}`;
+              return (
               <div
                 key={plat.platformName}
                 className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900"
@@ -410,7 +431,7 @@ function MetroPageInner() {
                     {plat.platformName}
                   </span>
                   <span className="rounded-full bg-teal-50 px-2.5 py-0.5 text-xs font-bold text-teal-700 dark:bg-teal-950/60 dark:text-teal-300">
-                    往 {plat.destination}
+                    {destLabel}
                   </span>
                 </div>
 
@@ -419,18 +440,18 @@ function MetroPageInner() {
                     <div className="text-xs text-slate-400">下一班車</div>
                     <div
                       className={`mt-0.5 text-2xl font-extrabold tabular-nums ${
-                        plat.nextTrainSeconds <= 45
+                        liveNext <= 45
                           ? 'text-red-600 animate-pulse'
                           : 'text-slate-900 dark:text-white'
                       }`}
                     >
-                      {formatCountdown(plat.nextTrainSeconds)}
+                      {formatCountdown(liveNext)}
                     </div>
                   </div>
                   <div className="text-right">
                     <div className="text-xs text-slate-400">下下班車</div>
                     <div className="mt-0.5 text-sm font-semibold text-slate-600 tabular-nums dark:text-slate-300">
-                      {formatCountdown(plat.followingTrainSeconds)}
+                      {liveFollowing > 0 ? formatCountdown(liveFollowing) : '依現場時刻'}
                     </div>
                   </div>
                 </div>
@@ -460,7 +481,8 @@ function MetroPageInner() {
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
             </div>
           )}
         </div>

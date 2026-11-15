@@ -75,7 +75,9 @@ function ThsrPageInner() {
 
   const loadThsr = useCallback(async () => {
     try {
-      const res = await fetch(`/api/transit/thsr?from=${from}&to=${to}`);
+      const res = await fetch(`/api/transit/thsr?from=${from}&to=${to}`, {
+        cache: 'no-store',
+      });
       const data = await res.json();
       setTrains(data.trains || []);
       setLiveVehicles(data.liveVehicles || []);

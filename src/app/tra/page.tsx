@@ -76,7 +76,7 @@ function TraPageInner() {
         mode === 'board'
           ? `mode=board&station=${station}`
           : `mode=od&from=${from}&to=${to}`;
-      const res = await fetch(`/api/transit/tra?${params}`);
+      const res = await fetch(`/api/transit/tra?${params}`, { cache: 'no-store' });
       const data = await res.json();
       setTrains(data.trains || []);
       setLiveVehicles(data.liveVehicles || []);
