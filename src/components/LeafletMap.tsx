@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
+import { LocateFixed } from 'lucide-react';
 
 export interface MapMarker {
   id: string;
@@ -58,7 +59,12 @@ export default function LeafletMap({
   const mapRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const layerGroupRef = useRef<L.LayerGroup | null>(null);
+  const userLayerRef = useRef<L.LayerGroup | null>(null);
+  const hasFittedBoundsRef = useRef(false);
+
   const [tileStyle, setTileStyle] = useState<TileStyleId>('voyager');
+  const [locating, setLocating] = useState(false);
+  const [locateError, setLocateError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -76,15 +82,19 @@ export default function LeafletMap({
     }).addTo(map);
 
     const group = L.layerGroup().addTo(map);
+    const userGroup = L.layerGroup().addTo(map);
     mapRef.current = map;
     tileLayerRef.current = tile;
     layerGroupRef.current = group;
+    userLayerRef.current = userGroup;
+    hasFittedBoundsRef.current = false;
 
     return () => {
       map.remove();
       mapRef.current = null;
       tileLayerRef.current = null;
       layerGroupRef.current = null;
+      userLayerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -104,7 +114,7 @@ export default function LeafletMap({
     }).addTo(map);
   }, [tileStyle]);
 
-  // 更新路線與標記 (BBox 上限保護，避免同時繪製過多 DOM 節點)
+  // 更新路線與標記 (僅在初次有資料時自動縮放，避免 15 秒刷新時拉走使用者手動縮放或定位的視角)
   useEffect(() => {
     const map = mapRef.current;
     const group = layerGroupRef.current;
@@ -118,11 +128,15 @@ export default function LeafletMap({
         weight: 4,
         opacity: 0.85,
       }).addTo(group);
-      map.fitBounds(line.getBounds(), { padding: [30, 30] });
-    } else if (markers.length > 0) {
+      if (!hasFittedBoundsRef.current) {
+        map.fitBounds(line.getBounds(), { padding: [30, 30] });
+        hasFittedBoundsRef.current = true;
+      }
+    } else if (markers.length > 0 && !hasFittedBoundsRef.current) {
       const bounds = L.latLngBounds(markers.map((m) => [m.lat, m.lng]));
       if (bounds.isValid()) {
         map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+        hasFittedBoundsRef.current = true;
       }
     }
 
@@ -163,6 +177,63 @@ export default function LeafletMap({
     });
   }, [polyline, polylineColor, markers]);
 
+  // 捕捉使用者現在位置 (瀏覽器 GPS Geolocation)
+  const handleLocateMe = () => {
+    const map = mapRef.current;
+    const userGroup = userLayerRef.current;
+    if (!map || !userGroup) return;
+
+    if (!navigator.geolocation) {
+      setLocateError('您的瀏覽器不支援定位功能');
+      setTimeout(() => setLocateError(null), 3500);
+      return;
+    }
+
+    setLocating(true);
+    setLocateError(null);
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude, accuracy } = pos.coords;
+        userGroup.clearLayers();
+
+        // 精準度半透明藍圈
+        L.circle([latitude, longitude], {
+          radius: Math.min(accuracy || 80, 300),
+          color: '#2563EB',
+          fillColor: '#3B82F6',
+          fillOpacity: 0.14,
+          weight: 1,
+        }).addTo(userGroup);
+
+        // 類 Google Maps 藍色定位中心點
+        L.circleMarker([latitude, longitude], {
+          radius: 8,
+          color: '#ffffff',
+          fillColor: '#2563EB',
+          fillOpacity: 1,
+          weight: 3,
+        })
+          .bindPopup('<strong>您的目前位置</strong>')
+          .addTo(userGroup)
+          .openPopup();
+
+        map.flyTo([latitude, longitude], 16, { duration: 0.8 });
+        setLocating(false);
+      },
+      (err) => {
+        setLocating(false);
+        const msg =
+          err.code === 1
+            ? '請允許瀏覽器存取您的位置權限'
+            : '無法取得目前位置，請稍後再試';
+        setLocateError(msg);
+        setTimeout(() => setLocateError(null), 4000);
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 10000 }
+    );
+  };
+
   return (
     <div className="relative">
       <div
@@ -170,7 +241,7 @@ export default function LeafletMap({
         className={`w-full overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 ${heightClass}`}
       />
 
-      {/* 右上角圖資風格切換器 (免費類 Google Map 風格 / 台灣官方圖資 / 深色) */}
+      {/* 右上角圖資風格切換器 */}
       <div className="absolute right-3 top-3 z-[400] flex gap-1 rounded-xl border border-slate-200/90 bg-white/95 p-1 shadow-sm backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/95">
         {(Object.keys(TILE_STYLES) as TileStyleId[]).map((id) => (
           <button
@@ -187,6 +258,29 @@ export default function LeafletMap({
           </button>
         ))}
       </div>
+
+      {/* 右下角：捕捉現在位置按鈕 */}
+      <button
+        type="button"
+        onClick={handleLocateMe}
+        disabled={locating}
+        title="捕捉目前位置"
+        className="absolute bottom-6 right-3 z-[400] flex items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/95 px-3 py-2 text-xs font-bold text-slate-700 shadow-md backdrop-blur-sm transition hover:bg-slate-50 active:scale-95 disabled:opacity-70 dark:border-slate-700 dark:bg-slate-900/95 dark:text-slate-200 dark:hover:bg-slate-800"
+      >
+        <LocateFixed
+          className={`h-4 w-4 text-blue-600 dark:text-blue-400 ${
+            locating ? 'animate-spin' : ''
+          }`}
+        />
+        <span>{locating ? '定位中...' : '我的位置'}</span>
+      </button>
+
+      {/* 定位失敗提示 */}
+      {locateError && (
+        <div className="absolute bottom-16 right-3 z-[400] rounded-lg bg-slate-900/90 px-3 py-1.5 text-xs font-medium text-white shadow-md">
+          {locateError}
+        </div>
+      )}
     </div>
   );
 }
