@@ -518,10 +518,12 @@ interface CompactTraBoardStop {
   trainNo: string;
   trainType: TraTrainRow['trainType'];
   direction: 0 | 1;
+  bound: 'north' | 'south';
   originStation: string;
   destinationStation: string;
   departureTime: string;
   arrivalTime: string;
+  remainingStops: { stationId: string; arrivalTime: string }[];
 }
 
 interface CompactTraTrain {
@@ -588,34 +590,54 @@ async function getTraDailyIndex(dateStr: string): Promise<TraDailyIndex | null> 
           activeStops[activeStops.length - 1]?.StationName?.Zh_tw ||
           '終點站';
 
+        const mappedStops = activeStops.map((s) => ({
+          stationId: s.StationID,
+          stationName: s.StationName?.Zh_tw || s.StationID,
+          arrivalTime: (s.ArrivalTime || s.DepartureTime || '--:--').slice(0, 5),
+          departureTime: (s.DepartureTime || s.ArrivalTime || '--:--').slice(0, 5),
+        }));
+
         trains.push({
           trainNo,
           trainType,
           direction,
-          stops: activeStops.map((s) => ({
-            stationId: s.StationID,
-            stationName: s.StationName?.Zh_tw || s.StationID,
-            arrivalTime: (s.ArrivalTime || '--:--').slice(0, 5),
-            departureTime: (s.DepartureTime || s.ArrivalTime || '--:--').slice(0, 5),
-          })),
+          stops: mappedStops,
         });
 
-        for (const s of activeStops) {
-          const dep = (s.DepartureTime || s.ArrivalTime || '--:--').slice(0, 5);
-          const arr = (s.ArrivalTime || s.DepartureTime || '--:--').slice(0, 5);
-          let arrList = byStation.get(s.StationID);
+        for (let idx = 0; idx < mappedStops.length; idx++) {
+          const s = mappedStops[idx];
+          const remaining = mappedStops.slice(idx + 1).map((r) => ({
+            stationId: r.stationId,
+            arrivalTime: r.arrivalTime,
+          }));
+          const curCoord = getTraStationCoord(s.stationId);
+          const nextCoord =
+            remaining.length > 0 ? getTraStationCoord(remaining[0].stationId) : null;
+          const prevCoord =
+            idx > 0 ? getTraStationCoord(mappedStops[idx - 1].stationId) : null;
+
+          let bound: 'north' | 'south' = direction === 0 ? 'north' : 'south';
+          if (curCoord && nextCoord) {
+            bound = nextCoord[0] >= curCoord[0] ? 'north' : 'south';
+          } else if (curCoord && prevCoord) {
+            bound = curCoord[0] >= prevCoord[0] ? 'north' : 'south';
+          }
+
+          let arrList = byStation.get(s.stationId);
           if (!arrList) {
             arrList = [];
-            byStation.set(s.StationID, arrList);
+            byStation.set(s.stationId, arrList);
           }
           arrList.push({
             trainNo,
             trainType,
             direction,
+            bound,
             originStation,
             destinationStation,
-            departureTime: dep,
-            arrivalTime: arr,
+            departureTime: s.departureTime,
+            arrivalTime: s.arrivalTime,
+            remainingStops: remaining,
           });
         }
       }
@@ -743,16 +765,17 @@ export async function getRealTraData(
 
   if (mode === 'board') {
     const stationSchedules = index?.byStation.get(station) ?? [];
-    const pickDir = (dir: 0 | 1): TraTrainRow[] => {
-      const dirAll = stationSchedules.filter((s) => s.direction === dir);
-      const upcoming = dirAll.filter((s) => s.departureTime >= hhmm);
-      const chosen = (upcoming.length > 0 ? upcoming : dirAll).slice(0, 12);
+    const pickBound = (bound: 'north' | 'south'): TraTrainRow[] => {
+      const boundAll = stationSchedules.filter((s) => s.bound === bound);
+      const upcoming = boundAll.filter((s) => s.departureTime >= hhmm);
+      const chosen = (upcoming.length > 0 ? upcoming : boundAll).slice(0, 24);
       return chosen.map((s) => {
         const delay = delayMap.get(s.trainNo) ?? 0;
         return {
           trainNo: s.trainNo,
           trainType: s.trainType,
           direction: s.direction,
+          bound: s.bound,
           originStation: s.originStation,
           destinationStation: s.destinationStation,
           departureTime: s.departureTime,
@@ -760,11 +783,12 @@ export async function getRealTraData(
           durationMinutes: 0,
           delayMinutes: delay,
           statusText: delay > 0 ? `晚 ${delay} 分` : '準點',
+          remainingStops: s.remainingStops,
         };
       });
     };
 
-    trains = [...pickDir(0), ...pickDir(1)];
+    trains = [...pickBound('north'), ...pickBound('south')];
 
     if (trains.length === 0) {
       trains = stationBoardAll

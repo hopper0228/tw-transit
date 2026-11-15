@@ -85,7 +85,8 @@ export interface MetroStationDetail {
 export interface TraTrainRow {
   trainNo: string;
   trainType: '新自強' | '普悠瑪' | '太魯閣' | '自強' | '莒光' | '區間快' | '區間';
-  direction: 0 | 1; // 0=順行(南下/東), 1=逆行(北上/西)
+  direction: 0 | 1; // 0=順行, 1=逆行
+  bound?: 'north' | 'south';
   originStation: string;
   destinationStation: string;
   departureTime: string;
@@ -93,6 +94,7 @@ export interface TraTrainRow {
   durationMinutes?: number;
   delayMinutes: number; // 0 = 準點
   statusText: string;
+  remainingStops?: { stationId: string; arrivalTime: string }[];
 }
 
 export interface ThsrTrainRow {

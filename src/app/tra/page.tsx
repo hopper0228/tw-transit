@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeftRight, List, Map as MapIcon, MapPin, TrainFront } from 'lucide-react';
+import { List, Map as MapIcon, MapPin, TrainFront, X } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
 import type { MapMarker } from '@/components/LeafletMap';
 import { useUserLocation } from '@/lib/location';
@@ -43,10 +43,8 @@ function getTrainTypeBadge(type: TraTrainRow['trainType']) {
 
 function TraPageInner() {
   const searchParams = useSearchParams();
-  const [mode, setMode] = useState<'board' | 'od'>('board');
   const [station, setStation] = useState(searchParams.get('station') || '1000');
-  const [from, setFrom] = useState('1000');
-  const [to, setTo] = useState('3300');
+  const [targetStation, setTargetStation] = useState(searchParams.get('to') || '');
   const [trains, setTrains] = useState<TraTrainRow[]>([]);
   const [liveVehicles, setLiveVehicles] = useState<LiveRailVehicle[]>([]);
   const [updatedAt, setUpdatedAt] = useState('');
@@ -63,8 +61,6 @@ function TraPageInner() {
     if (nearest) {
       const t = setTimeout(() => {
         setStation(nearest.id);
-        setFrom(nearest.id);
-        setTo(nearest.id === '3300' ? '1000' : '3300');
         setAutoMatchedLabel(`${nearest.name}站`);
       }, 0);
       return () => clearTimeout(t);
@@ -77,14 +73,8 @@ function TraPageInner() {
 
   const loadTra = useCallback(
     async (signal?: AbortSignal, force = false) => {
-      const key =
-        mode === 'board'
-          ? `tra:board:${station}`
-          : `tra:od:${from}:${to}`;
-      const params =
-        mode === 'board'
-          ? `mode=board&station=${encodeURIComponent(station)}`
-          : `mode=od&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+      const key = `tra:board:${station}`;
+      const params = `mode=board&station=${encodeURIComponent(station)}`;
 
       const cached = getCached<{
         trains?: TraTrainRow[];
@@ -116,7 +106,7 @@ function TraPageInner() {
         setLoading(false);
       }
     },
-    [mode, station, from, to, getCached, fetchWithCache]
+    [station, getCached, fetchWithCache]
   );
 
   useEffect(() => {
@@ -138,10 +128,17 @@ function TraPageInner() {
     setFrontendUpdatedAt(triggerFrontendRefresh());
   }, [triggerFrontendRefresh]);
 
-  const swapOd = () => {
-    setFrom(to);
-    setTo(from);
-  };
+  const filteredTrains = useMemo(() => {
+    if (!targetStation) return trains;
+    return trains.filter((t) =>
+      t.remainingStops?.some((s) => s.stationId === targetStation)
+    );
+  }, [trains, targetStation]);
+
+  const targetStationName = useMemo(
+    () => TRA_STATIONS.find((s) => s.id === targetStation)?.name || '',
+    [targetStation]
+  );
 
   const traMapData = useMemo(() => {
     const stationsWithCoord = TRA_STATIONS.map((s) => {
@@ -152,11 +149,10 @@ function TraPageInner() {
     const polyline: [number, number][] = stationsWithCoord.map((s) => [s.lat, s.lng]);
 
     const stopMarkers: MapMarker[] = stationsWithCoord.map((st) => {
-      const isSelected =
-        mode === 'board' ? st.id === station : st.id === from || st.id === to;
+      const isSelected = st.id === station || (Boolean(targetStation) && st.id === targetStation);
       let subtitle = `台鐵車站代碼 ${st.id}`;
-      if (isSelected && trains.length > 0) {
-        const preview = trains
+      if (isSelected && filteredTrains.length > 0) {
+        const preview = filteredTrains
           .slice(0, 2)
           .map((t) => `${t.trainType} ${t.trainNo} (${t.departureTime} · ${t.statusText})`)
           .join('<br/>');
@@ -189,7 +185,7 @@ function TraPageInner() {
       markers: [...stopMarkers, ...vehicleMarkers],
       vehicleCount: vehicleMarkers.length,
     };
-  }, [mode, station, from, to, trains, liveVehicles]);
+  }, [station, targetStation, filteredTrains, liveVehicles]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-5">
@@ -236,43 +232,23 @@ function TraPageInner() {
               地圖
             </button>
           </div>
-
-          {/* 雙分頁切換 */}
-          <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
-            <button
-              onClick={() => setMode('board')}
-              className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition ${
-                mode === 'board'
-                  ? 'bg-white text-indigo-600 shadow-xs dark:bg-slate-900 dark:text-indigo-400'
-                  : 'text-slate-500 hover:text-slate-800 dark:text-slate-400'
-              }`}
-            >
-              車站即時看板
-            </button>
-            <button
-              onClick={() => setMode('od')}
-              className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition ${
-                mode === 'od'
-                  ? 'bg-white text-indigo-600 shadow-xs dark:bg-slate-900 dark:text-indigo-400'
-                  : 'text-slate-500 hover:text-slate-800 dark:text-slate-400'
-              }`}
-            >
-              起訖點時刻表
-            </button>
-          </div>
         </div>
       </div>
 
-      {/* 條件選擇面板 */}
+      {/* 條件選擇面板：出發站 + 選填目標站 (前端即時篩選) */}
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-        {mode === 'board' ? (
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2.5">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-slate-500">全部車站：</span>
+                <span className="text-xs font-semibold text-slate-500">出發站：</span>
                 <select
                   value={station}
-                  onChange={(e) => setStation(e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setStation(next);
+                    if (targetStation === next) setTargetStation('');
+                  }}
                   className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
                 >
                   {TRA_STATIONS.map((st) => (
@@ -282,62 +258,34 @@ function TraPageInner() {
                   ))}
                 </select>
               </div>
-              <AutoRefreshBadge
-                intervalSeconds={30}
-                onRefresh={handleBackgroundRefresh}
-                onManualRefresh={handleManualFrontendRefresh}
-                isRefreshing={loading}
-                lastUpdated={frontendUpdatedAt || updatedAt}
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] font-semibold text-slate-400">熱門：</span>
-              {TRA_STATIONS.filter((st) => POPULAR_TRA_IDS.includes(st.id)).map((st) => (
-                <button
-                  key={st.id}
-                  onClick={() => setStation(st.id)}
-                  className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
-                    station === st.id
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
-                  }`}
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-500">目標站（選填）：</span>
+                <select
+                  value={targetStation}
+                  onChange={(e) => setTargetStation(e.target.value)}
+                  className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
                 >
-                  {st.name}
-                </button>
-              ))}
+                  <option value="">全部方向（不篩選目標站）</option>
+                  {TRA_STATIONS.filter((st) => st.id !== station).map((st) => (
+                    <option key={st.id} value={st.id}>
+                      往 {st.name}車站 ({st.id})
+                    </option>
+                  ))}
+                </select>
+                {targetStation && (
+                  <button
+                    type="button"
+                    onClick={() => setTargetStation('')}
+                    className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300"
+                    title="清除目標站篩選"
+                  >
+                    <X className="h-3 w-3" />
+                    清除
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-3">
-            <select
-              value={from}
-              onChange={(e) => setFrom(e.target.value)}
-              className="flex-1 rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
-            >
-              {TRA_STATIONS.map((s) => (
-                <option key={s.id} value={s.id}>
-                  出發：{s.name}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={swapOd}
-              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
-              title="起訖站對調"
-            >
-              <ArrowLeftRight className="h-4 w-4 text-slate-600 dark:text-slate-300" />
-            </button>
-            <select
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
-              className="flex-1 rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
-            >
-              {TRA_STATIONS.map((s) => (
-                <option key={s.id} value={s.id}>
-                  抵達：{s.name}
-                </option>
-              ))}
-            </select>
             <AutoRefreshBadge
               intervalSeconds={30}
               onRefresh={handleBackgroundRefresh}
@@ -346,7 +294,26 @@ function TraPageInner() {
               lastUpdated={frontendUpdatedAt || updatedAt}
             />
           </div>
-        )}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-semibold text-slate-400">熱門：</span>
+            {TRA_STATIONS.filter((st) => POPULAR_TRA_IDS.includes(st.id)).map((st) => (
+              <button
+                key={st.id}
+                onClick={() => {
+                  setStation(st.id);
+                  if (targetStation === st.id) setTargetStation('');
+                }}
+                className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                  station === st.id
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                }`}
+              >
+                {st.name}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* 地圖模式 / 列車列表 */}
@@ -362,13 +329,15 @@ function TraPageInner() {
             台鐵環島幹線 · 地圖即時顯示 {traMapData.vehicleCount} 班行駛中列車與 {TRA_STATIONS.length} 個主要車站資訊
           </p>
         </div>
-      ) : mode === 'board' ? (
+      ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {[
-            { dir: 0, title: '順行 (西部北上往基隆 / 東部南下)' },
-            { dir: 1, title: '逆行 (西部南下往高雄 / 東部北上)' },
+            { bound: 'north' as const, title: '北上' },
+            { bound: 'south' as const, title: '南下' },
           ].map((col) => {
-            const list = trains.filter((t) => t.direction === col.dir);
+            const list = filteredTrains.filter(
+              (t) => (t.bound || (t.direction === 0 ? 'north' : 'south')) === col.bound
+            );
             const nowDate = nowMs > 0 ? new Date(nowMs) : null;
             const nowMin = nowDate
               ? nowDate.getHours() * 60 +
@@ -377,12 +346,22 @@ function TraPageInner() {
               : null;
             return (
               <div
-                key={col.dir}
+                key={col.bound}
                 className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-900"
               >
-                <div className="border-b border-slate-100 bg-slate-50 px-4 py-2.5 text-xs font-bold text-slate-700 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-200">
-                  {col.title}
+                <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-2.5 text-xs font-bold text-slate-700 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-200">
+                  <span>{col.title}</span>
+                  <span className="text-[11px] font-medium text-slate-400">
+                    {list.length} 班
+                  </span>
                 </div>
+                {list.length === 0 ? (
+                  <div className="px-4 py-8 text-center text-xs text-slate-400">
+                    {targetStation
+                      ? `此方向目前無直達 ${targetStationName} 的班次`
+                      : '目前無即將發車班次'}
+                  </div>
+                ) : (
                 <ul className="divide-y divide-slate-100 dark:divide-slate-800">
                   {list.map((t) => {
                     const [hh, mm] = t.departureTime.split(':').map(Number);
@@ -403,6 +382,9 @@ function TraPageInner() {
                           : diffMin <= 60
                             ? ` · 約 ${diffMin} 分後`
                             : '';
+                    const targetStopInfo = targetStation
+                      ? t.remainingStops?.find((s) => s.stationId === targetStation)
+                      : undefined;
                     return (
                     <li
                       key={`${t.trainNo}-${t.departureTime}`}
@@ -421,7 +403,9 @@ function TraPageInner() {
                             {t.trainNo} 次 · 往 {t.destinationStation}
                           </div>
                           <div className="text-xs text-slate-500">
-                            表定 {t.departureTime} 開車{etaLabel}
+                            表定 {t.departureTime} 開車
+                            {targetStopInfo ? ` → 抵達 ${targetStationName} ${targetStopInfo.arrivalTime}` : ''}
+                            {etaLabel}
                           </div>
                         </div>
                       </div>
@@ -438,48 +422,10 @@ function TraPageInner() {
                     );
                   })}
                 </ul>
+                )}
               </div>
             );
           })}
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-900">
-          <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-            {trains.map((t) => (
-              <li
-                key={t.trainNo}
-                className="flex flex-wrap items-center justify-between gap-3 px-5 py-4"
-              >
-                <div className="flex items-center gap-3">
-                  <span
-                    className={`rounded-md px-2.5 py-1 text-xs font-bold ${getTrainTypeBadge(
-                      t.trainType
-                    )}`}
-                  >
-                    {t.trainType} {t.trainNo}
-                  </span>
-                  <div>
-                    <div className="text-base font-bold tabular-nums text-slate-900 dark:text-white">
-                      {t.departureTime} → {t.arrivalTime}
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      {t.originStation} → {t.destinationStation} · 行車約{' '}
-                      {t.durationMinutes} 分鐘
-                    </div>
-                  </div>
-                </div>
-                <span
-                  className={`rounded-full px-3 py-1 text-xs font-bold ${
-                    t.delayMinutes > 0
-                      ? 'bg-red-50 text-red-600 dark:bg-red-950/60 dark:text-red-400'
-                      : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'
-                  }`}
-                >
-                  {t.statusText}
-                </span>
-              </li>
-            ))}
-          </ul>
         </div>
       )}
     </div>
