@@ -22,7 +22,7 @@ const responseCache = new Map<string, CacheEntry<unknown>>();
 const staleCache = new Map<string, CacheEntry<unknown>>();
 const inFlight = new Map<string, Promise<unknown>>();
 const MAX_TDX_CACHE_ENTRIES = 150;
-const MIN_REQUEST_INTERVAL_MS = 1500;
+const MIN_REQUEST_INTERVAL_MS = 900;
 
 let tdxQueue: Promise<void> = Promise.resolve();
 let lastRequestAt = 0;

@@ -82,6 +82,54 @@ interface TdxMetroStationTimetable {
   }[];
 }
 
+interface CompactMetroTable {
+  destId?: string;
+  destName: string;
+  serviceDay?: Record<string, boolean | string>;
+  timesMin: number[];
+}
+
+const metroScheduleIndexCache = new Map<
+  string,
+  { expiresAt: number; byStation: Map<string, CompactMetroTable[]> }
+>();
+
+async function getMetroStationTables(
+  sysId: string,
+  stationId: string
+): Promise<CompactMetroTable[]> {
+  const now = Date.now();
+  const cached = metroScheduleIndexCache.get(sysId);
+  if (cached && cached.expiresAt > now) {
+    return cached.byStation.get(stationId) || [];
+  }
+
+  const ttRaw = await fetchTdx<TdxMetroStationTimetable[]>(
+    `/v2/Rail/Metro/StationTimeTable/${sysId}?%24format=JSON`,
+    21600
+  ).catch(() => [] as TdxMetroStationTimetable[]);
+
+  const byStation = new Map<string, CompactMetroTable[]>();
+  if (Array.isArray(ttRaw) && ttRaw.length > 0) {
+    for (const tb of ttRaw) {
+      if (!tb.StationID) continue;
+      const arr = byStation.get(tb.StationID) || [];
+      arr.push({
+        destId: tb.DestinationStationID || tb.DestinationStaionID,
+        destName: tb.DestinationStationName?.Zh_tw || '',
+        serviceDay: tb.ServiceDay,
+        timesMin: (tb.Timetables || []).map((t) => parseHhmmToMinutes(t.DepartureTime)),
+      });
+      byStation.set(tb.StationID, arr);
+    }
+    metroScheduleIndexCache.set(sysId, {
+      expiresAt: now + 6 * 3600 * 1000,
+      byStation,
+    });
+  }
+  return byStation.get(stationId) || [];
+}
+
 export async function getRealMetroStation(
   systemId: string,
   stationId: string
@@ -142,20 +190,15 @@ export async function getRealMetroStation(
   }
 
   try {
-    const liveRaw = await fetchTdx<TdxMetroLiveBoard[]>(
-      `/v2/Rail/Metro/LiveBoard/${sys.id}?%24format=JSON`,
-      25
-    ).catch(() => [] as TdxMetroLiveBoard[]);
-
-    const ttRaw = await fetchTdx<TdxMetroStationTimetable[]>(
-      `/v2/Rail/Metro/StationTimeTable/${sys.id}?%24filter=StationID%20eq%20%27${encodeURIComponent(
-        matchedStation.id
-      )}%27&%24format=JSON`,
-      3600
-    ).catch(() => [] as TdxMetroStationTimetable[]);
+    const [liveRaw, ttList] = await Promise.all([
+      fetchTdx<TdxMetroLiveBoard[]>(
+        `/v2/Rail/Metro/LiveBoard/${sys.id}?%24format=JSON`,
+        25
+      ).catch(() => [] as TdxMetroLiveBoard[]),
+      getMetroStationTables(sys.id, matchedStation.id),
+    ]);
 
     const list = Array.isArray(liveRaw) ? liveRaw : [];
-    const ttList = Array.isArray(ttRaw) ? ttRaw : [];
 
     // 1. 精準比對目前車站 (避免轉乘站混入其他路線月台)
     let stationRows = list.filter((r) => r.StationID === matchedStation.id);
@@ -196,7 +239,7 @@ export async function getRealMetroStation(
     }
 
     const todayTables = ttList.filter(
-      (t) => !t.ServiceDay || t.ServiceDay[weekday] === true
+      (t) => !t.serviceDay || t.serviceDay[weekday] === true
     );
     const activeTables = todayTables.length > 0 ? todayTables : ttList;
 
@@ -204,12 +247,11 @@ export async function getRealMetroStation(
     const revSched: { sec: number; dest: string }[] = [];
 
     for (const tb of activeTables) {
-      const destName = tb.DestinationStationName?.Zh_tw || '';
-      const destId = tb.DestinationStationID || tb.DestinationStaionID;
-      const dir = resolveDirByDest(destId, destName);
+      const destName = tb.destName;
+      const dir = resolveDirByDest(tb.destId, destName);
       if (!dir) continue;
-      for (const item of tb.Timetables || []) {
-        let depMin = parseHhmmToMinutes(item.DepartureTime);
+      for (const baseMin of tb.timesMin) {
+        let depMin = baseMin;
         if (depMin < 180 && minutesOfDay > 1200) depMin += 1440;
         const diffSec = Math.round((depMin - minutesOfDay) * 60);
         if (diffSec >= 0 && diffSec <= 3600) {
