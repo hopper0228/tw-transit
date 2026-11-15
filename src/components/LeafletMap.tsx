@@ -24,29 +24,6 @@ interface LeafletMapProps {
   heightClass?: string;
 }
 
-type TileStyleId = 'voyager' | 'nlsc' | 'dark';
-
-const TILE_STYLES: Record<
-  TileStyleId,
-  { label: string; url: string; attribution: string }
-> = {
-  voyager: {
-    label: '現代極簡',
-    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-    attribution: '&copy; OpenStreetMap &copy; CARTO',
-  },
-  nlsc: {
-    label: '台灣圖資',
-    url: 'https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}',
-    attribution: '&copy; 內政部國土測繪中心',
-  },
-  dark: {
-    label: '深色',
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    attribution: '&copy; OpenStreetMap &copy; CARTO',
-  },
-};
-
 export default function LeafletMap({
   center = [25.0468, 121.5171],
   zoom = 13,
@@ -57,12 +34,10 @@ export default function LeafletMap({
 }: LeafletMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
-  const tileLayerRef = useRef<L.TileLayer | null>(null);
   const layerGroupRef = useRef<L.LayerGroup | null>(null);
   const userLayerRef = useRef<L.LayerGroup | null>(null);
   const hasFittedBoundsRef = useRef(false);
 
-  const [tileStyle, setTileStyle] = useState<TileStyleId>('voyager');
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
 
@@ -75,16 +50,15 @@ export default function LeafletMap({
       zoomControl: true,
     });
 
-    const cfg = TILE_STYLES.voyager;
-    const tile = L.tileLayer(cfg.url, {
-      attribution: cfg.attribution,
+    // 使用完全免費且無 API Key 問題的標準 OpenStreetMap 圖資
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
       maxZoom: 19,
     }).addTo(map);
 
     const group = L.layerGroup().addTo(map);
     const userGroup = L.layerGroup().addTo(map);
     mapRef.current = map;
-    tileLayerRef.current = tile;
     layerGroupRef.current = group;
     userLayerRef.current = userGroup;
     hasFittedBoundsRef.current = false;
@@ -92,27 +66,11 @@ export default function LeafletMap({
     return () => {
       map.remove();
       mapRef.current = null;
-      tileLayerRef.current = null;
       layerGroupRef.current = null;
       userLayerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // 切換地圖圖資風格
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    if (tileLayerRef.current) {
-      map.removeLayer(tileLayerRef.current);
-    }
-    const cfg = TILE_STYLES[tileStyle];
-    tileLayerRef.current = L.tileLayer(cfg.url, {
-      attribution: cfg.attribution,
-      maxZoom: 19,
-    }).addTo(map);
-  }, [tileStyle]);
 
   // 更新路線與標記 (僅在初次有資料時自動縮放，避免 15 秒刷新時拉走使用者手動縮放或定位的視角)
   useEffect(() => {
@@ -206,7 +164,7 @@ export default function LeafletMap({
           weight: 1,
         }).addTo(userGroup);
 
-        // 類 Google Maps 藍色定位中心點
+        // 藍色定位中心點
         L.circleMarker([latitude, longitude], {
           radius: 8,
           color: '#ffffff',
@@ -240,24 +198,6 @@ export default function LeafletMap({
         ref={containerRef}
         className={`w-full overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 ${heightClass}`}
       />
-
-      {/* 右上角圖資風格切換器 */}
-      <div className="absolute right-3 top-3 z-[400] flex gap-1 rounded-xl border border-slate-200/90 bg-white/95 p-1 shadow-sm backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/95">
-        {(Object.keys(TILE_STYLES) as TileStyleId[]).map((id) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTileStyle(id)}
-            className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
-              tileStyle === id
-                ? 'bg-blue-600 text-white shadow-2xs'
-                : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-            }`}
-          >
-            {TILE_STYLES[id].label}
-          </button>
-        ))}
-      </div>
 
       {/* 右下角：捕捉現在位置按鈕 */}
       <button
