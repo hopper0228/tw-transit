@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getMockBusRouteDetail, MOCK_BUS_ROUTES } from '@/lib/mock-data';
 import {
   GeoPoint,
   getTaipeiBusRouteDetail,
@@ -7,6 +6,8 @@ import {
 } from '@/lib/opendata-client';
 import { fetchTdx, isTdxConfigured } from '@/lib/tdx-client';
 import { BusRouteDetail, BusStopStatus } from '@/lib/types';
+
+const NO_STORE_HEADERS = { 'Cache-Control': 'no-store, max-age=0' };
 
 function parseUserPoint(params: URLSearchParams): GeoPoint | undefined {
   const lat = Number(params.get('lat'));
@@ -91,24 +92,29 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const filtered = MOCK_BUS_ROUTES.filter((r) => {
-      const matchCity = city === 'All' || r.city === city;
-      const matchQ =
-        !q ||
-        r.routeName.toLowerCase().includes(q) ||
-        r.departureStop.toLowerCase().includes(q) ||
-        r.destinationStop.toLowerCase().includes(q);
-      return matchCity && matchQ;
-    });
-
-    return NextResponse.json({ routes: filtered, source: 'mock' });
+    return NextResponse.json(
+      { routes: [], total: 0, source: 'tdx' },
+      { headers: NO_STORE_HEADERS }
+    );
   }
 
-  // 2. 指定特定路線：回傳該路線即時站序與到站時間
-  if (isTdxConfigured() && city !== 'InterCity') {
+  // 2. 台北市公車優先使用免配額政府即時 OpenData (含站序、預估到站與即時公車座標)，節省 TDX 額度
+  if (city === 'Taipei' || city === 'All') {
+    try {
+      const realDetail = await getTaipeiBusRouteDetail(routeName, direction);
+      if (realDetail) {
+        return NextResponse.json(realDetail, { headers: NO_STORE_HEADERS });
+      }
+    } catch {
+      // fallback to TDX below
+    }
+  }
+
+  // 3. 其他縣市 (新北/桃園/台中/台南/高雄等) 使用 TDX 即時站序、到站時間與行駛中車輛
+  if (isTdxConfigured() && city !== 'InterCity' && city !== 'All') {
     try {
       const encodedRoute = encodeURIComponent(routeName);
-      const [stopOfRoutes, etas] = await Promise.all([
+      const [stopOfRoutes, etas, liveBuses] = await Promise.all([
         fetchTdx<
           {
             RouteName: { Zh_tw: string };
@@ -120,27 +126,67 @@ export async function GET(req: NextRequest) {
               StopPosition: { PositionLat: number; PositionLon: number };
             }[];
           }[]
-        >(`/v2/Bus/StopOfRoute/City/${city}/${encodedRoute}?$format=JSON`, 3600),
+        >(`/v2/Bus/StopOfRoute/City/${city}/${encodedRoute}?%24format=JSON`, 3600),
         fetchTdx<
           {
+            RouteName?: { Zh_tw?: string };
             StopUID: string;
             Direction: number;
             EstimateTime?: number;
             StopStatus: number;
             PlateNumb?: string;
           }[]
-        >(`/v2/Bus/EstimatedTimeOfArrival/City/${city}/${encodedRoute}?$format=JSON`, 15),
+        >(`/v2/Bus/EstimatedTimeOfArrival/City/${city}/${encodedRoute}?%24format=JSON`, 15).catch(
+          () => []
+        ),
+        fetchTdx<
+          {
+            PlateNumb: string;
+            RouteName?: { Zh_tw?: string };
+            Direction: number;
+            BusPosition?: { PositionLat: number; PositionLon: number };
+            Azimuth?: number;
+          }[]
+        >(`/v2/Bus/RealTimeByFrequency/City/${city}/${encodedRoute}?%24format=JSON`, 15).catch(
+          () => []
+        ),
       ]);
 
+      const exactStops = (Array.isArray(stopOfRoutes) ? stopOfRoutes : []).filter(
+        (r) => r.RouteName?.Zh_tw === routeName
+      );
       const dirRoute =
-        stopOfRoutes.find(
-          (r) => r.RouteName.Zh_tw === routeName && r.Direction === direction
-        ) || stopOfRoutes[0];
+        exactStops.find((r) => r.Direction === direction) || exactStops[0];
 
       if (dirRoute) {
         const etaMap = new Map(
-          etas.filter((e) => e.Direction === direction).map((e) => [e.StopUID, e])
+          (Array.isArray(etas) ? etas : [])
+            .filter(
+              (e) =>
+                (!e.RouteName?.Zh_tw || e.RouteName.Zh_tw === routeName) &&
+                e.Direction === direction
+            )
+            .map((e) => [e.StopUID, e])
         );
+
+        const vehicles = (Array.isArray(liveBuses) ? liveBuses : [])
+          .filter(
+            (b) =>
+              (!b.RouteName?.Zh_tw || b.RouteName.Zh_tw === routeName) &&
+              b.Direction === direction &&
+              b.BusPosition &&
+              Number.isFinite(b.BusPosition.PositionLat) &&
+              Number.isFinite(b.BusPosition.PositionLon)
+          )
+          .map((b) => ({
+            plateNumb: b.PlateNumb,
+            lat: b.BusPosition!.PositionLat,
+            lng: b.BusPosition!.PositionLon,
+            azimuth: b.Azimuth ?? 0,
+            isLowFloor: true,
+            isElectric: false,
+            nearStopSeq: 0,
+          }));
 
         const stops: BusStopStatus[] = dirRoute.Stops.map((s) => {
           const eta = etaMap.get(s.StopUID);
@@ -179,30 +225,47 @@ export async function GET(req: NextRequest) {
           headsign: `往 ${stops[stops.length - 1]?.stopName || '終點'}`,
           stops,
           shape: stops.map((s) => [s.lat, s.lng]),
-          vehicles: [],
+          vehicles,
           updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
           source: 'tdx',
         };
 
-        return NextResponse.json(detail);
+        return NextResponse.json(detail, { headers: NO_STORE_HEADERS });
       }
     } catch {
-      // fallback below
+      // fallback to OpenData below
     }
   }
 
   // 雙北公車使用免帳號真實台北市 OpenData 即時動態
-  if (city === 'Taipei' || city === 'All') {
+  if (city === 'Taipei' || city === 'NewTaipei' || city === 'All') {
     try {
       const realDetail = await getTaipeiBusRouteDetail(routeName, direction);
       if (realDetail) {
-        return NextResponse.json(realDetail);
+        return NextResponse.json(realDetail, { headers: NO_STORE_HEADERS });
       }
     } catch {
-      // fallback below
+      // ignore
     }
   }
 
-  const mockDetail = getMockBusRouteDetail(routeName, city, direction);
-  return NextResponse.json(mockDetail);
+  const emptyDetail: BusRouteDetail = {
+    route: {
+      routeUid: `${city}-${routeName}`,
+      routeName,
+      city,
+      cityName: city,
+      departureStop: '',
+      destinationStop: '',
+      operatorName: '目前暫無即時資料',
+    },
+    direction,
+    headsign: '',
+    stops: [],
+    shape: [],
+    vehicles: [],
+    updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
+    source: 'tdx',
+  };
+  return NextResponse.json(emptyDetail, { headers: NO_STORE_HEADERS });
 }

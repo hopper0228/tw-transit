@@ -17,15 +17,23 @@ interface CacheEntry<T> {
   expiresAt: number;
 }
 
-let cachedToken: CachedToken | null = null;
-const responseCache = new Map<string, CacheEntry<unknown>>();
-const staleCache = new Map<string, CacheEntry<unknown>>();
-const inFlight = new Map<string, Promise<unknown>>();
 const MAX_TDX_CACHE_ENTRIES = 150;
-const MIN_REQUEST_INTERVAL_MS = 900;
+const MIN_REQUEST_INTERVAL_MS = 1200;
 
-let tdxQueue: Promise<void> = Promise.resolve();
-let lastRequestAt = 0;
+const g = globalThis as unknown as {
+  __tdxToken?: CachedToken | null;
+  __tdxResponseCache?: Map<string, CacheEntry<unknown>>;
+  __tdxStaleCache?: Map<string, CacheEntry<unknown>>;
+  __tdxInFlight?: Map<string, Promise<unknown>>;
+  __tdxQueue?: Promise<void>;
+  __tdxLastReqAt?: number;
+};
+
+const responseCache = (g.__tdxResponseCache ??= new Map<string, CacheEntry<unknown>>());
+const staleCache = (g.__tdxStaleCache ??= new Map<string, CacheEntry<unknown>>());
+const inFlight = (g.__tdxInFlight ??= new Map<string, Promise<unknown>>());
+let tdxQueue: Promise<void> = g.__tdxQueue ?? Promise.resolve();
+let lastRequestAt = g.__tdxLastReqAt ?? 0;
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -38,12 +46,14 @@ function scheduleTdxSlot<T>(fn: () => Promise<T>): Promise<T> {
       await sleep(wait);
     }
     lastRequestAt = Date.now();
+    g.__tdxLastReqAt = lastRequestAt;
     return fn();
   });
   tdxQueue = run.then(
     () => undefined,
     () => undefined
   );
+  g.__tdxQueue = tdxQueue;
   return run;
 }
 
@@ -74,6 +84,7 @@ export function isTdxConfigured(): boolean {
 
 async function getAccessToken(): Promise<string> {
   const now = Date.now();
+  const cachedToken = g.__tdxToken ?? null;
   if (cachedToken && cachedToken.expiresAt > now + 60_000) {
     return cachedToken.accessToken;
   }
@@ -103,11 +114,12 @@ async function getAccessToken(): Promise<string> {
   }
 
   const json = (await res.json()) as { access_token: string; expires_in: number };
-  cachedToken = {
+  const nextToken: CachedToken = {
     accessToken: json.access_token,
     expiresAt: now + json.expires_in * 1000,
   };
-  return cachedToken.accessToken;
+  g.__tdxToken = nextToken;
+  return nextToken.accessToken;
 }
 
 /**
@@ -142,11 +154,11 @@ export async function fetchTdx<T>(path: string, ttlSeconds = 15): Promise<T> {
 
     try {
       let res = await attemptFetch();
-      for (const waitMs of [2500, 4500]) {
+      for (const waitMs of [3000, 5500]) {
         if (res.status !== 429) break;
         const retryAfter = Number(res.headers.get('retry-after'));
         const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : waitMs;
-        await sleep(Math.min(delay, 6000));
+        await sleep(Math.min(delay, 7000));
         res = await attemptFetch();
       }
       if (!res.ok) {

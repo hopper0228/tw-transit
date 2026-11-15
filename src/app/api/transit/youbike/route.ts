@@ -59,18 +59,24 @@ export async function GET(req: NextRequest) {
       maxDistance,
       50
     );
-    return NextResponse.json({
-      stations,
-      total,
-      updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
-      source: 'opendata',
-    });
+    return NextResponse.json(
+      {
+        stations,
+        total,
+        updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
+        source: 'opendata',
+      },
+      { headers: { 'Cache-Control': 'no-store, max-age=0' } }
+    );
   } catch {
-    return NextResponse.json({
-      stations: [],
-      total: 0,
-      updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
-      source: 'mock',
-    });
+    return NextResponse.json(
+      {
+        stations: [],
+        total: 0,
+        updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
+        source: 'opendata',
+      },
+      { headers: { 'Cache-Control': 'no-store, max-age=0' } }
+    );
   }
 }

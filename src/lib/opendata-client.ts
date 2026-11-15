@@ -684,6 +684,8 @@ interface TcmsvParkDesc {
   address: string;
   payex: string;
   totalcar: number;
+  tw97x?: string;
+  tw97y?: string;
   EntranceCoord?: {
     EntrancecoordInfo?: { Xcod: string; Ycod: string }[];
   };
@@ -731,22 +733,31 @@ export async function getRealParkingLots(
       'https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_alldesc.json',
       3600,
       false,
-      (raw) =>
-        (raw.data?.park || []).map((p) => {
+      (raw) => {
+        const list: CompactParkingMeta[] = [];
+        for (const p of raw.data?.park || []) {
           const coord = p.EntranceCoord?.EntrancecoordInfo?.[0];
-          const lat = coord ? Number(coord.Xcod) : 25.0478;
-          const lng = coord ? Number(coord.Ycod) : 121.517;
-          return {
+          let lat = coord ? Number(coord.Xcod) : NaN;
+          let lng = coord ? Number(coord.Ycod) : NaN;
+          if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < 20 || lng < 118) {
+            const wgs = twd97ToWgs84(Number(p.tw97x), Number(p.tw97y));
+            if (!wgs) continue;
+            lat = wgs.lat;
+            lng = wgs.lng;
+          }
+          list.push({
             id: p.id,
             name: p.name,
             address: `${p.area} · ${p.address}`,
-            lat: Number.isFinite(lat) ? lat : 25.0478,
-            lng: Number.isFinite(lng) ? lng : 121.517,
+            lat,
+            lng,
             totalSpaces: p.totalcar || 0,
             fareDescription: p.payex?.slice(0, 80) || '依現場公告',
             parkingType: p.type === '1' ? '立體' : '平面',
-          };
-        })
+          });
+        }
+        return list;
+      }
     ).catch(() => [] as CompactParkingMeta[]),
     fetchAndTransform<{ data: { park: TcmsvParkAvail[] } }, Map<string, number>>(
       'tpe-parking-avail-map',

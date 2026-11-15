@@ -81,6 +81,7 @@ function BusPageInner() {
 
   // 路線詳情狀態
   const [selectedRoute, setSelectedRoute] = useState<string | null>(initialRoute);
+  const [selectedRouteCity, setSelectedRouteCity] = useState<string>(initialCity);
   const [direction, setDirection] = useState<0 | 1>(0);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list'); // 預設為台北等公車垂直列表模式
   const [detail, setDetail] = useState<BusRouteDetail | null>(null);
@@ -120,9 +121,10 @@ function BusPageInner() {
     async (routeName: string, dir: 0 | 1) => {
       try {
         const res = await fetch(
-          `/api/transit/bus?city=${encodeURIComponent(city)}&route=${encodeURIComponent(
+          `/api/transit/bus?city=${encodeURIComponent(selectedRouteCity)}&route=${encodeURIComponent(
             routeName
-          )}&dir=${dir}`
+          )}&dir=${dir}`,
+          { cache: 'no-store' }
         );
         const data: BusRouteDetail = await res.json();
         setDetail(data);
@@ -133,7 +135,7 @@ function BusPageInner() {
         setLoadingDetail(false);
       }
     },
-    [city]
+    [selectedRouteCity]
   );
 
   useEffect(() => {
@@ -519,6 +521,7 @@ function BusPageInner() {
                 <button
                   onClick={() => {
                     setDirection(0);
+                    setSelectedRouteCity(r.city);
                     setSelectedRoute(r.routeName);
                   }}
                   className="flex w-full items-center justify-between px-4 py-3.5 text-left transition hover:bg-slate-50 dark:hover:bg-slate-800/60"

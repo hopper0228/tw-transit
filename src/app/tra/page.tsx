@@ -326,8 +326,8 @@ function TraPageInner() {
       ) : mode === 'board' ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {[
-            { dir: 0, title: '順行 (南下 / 東部)' },
-            { dir: 1, title: '逆行 (北上 / 西部)' },
+            { dir: 0, title: '順行 (西部北上往基隆 / 東部南下)' },
+            { dir: 1, title: '逆行 (西部南下往高雄 / 東部北上)' },
           ].map((col) => {
             const list = trains.filter((t) => t.direction === col.dir);
             return (
