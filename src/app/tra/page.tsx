@@ -7,6 +7,7 @@ import { ArrowLeftRight, List, Map as MapIcon, MapPin, TrainFront } from 'lucide
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
 import type { MapMarker } from '@/components/LeafletMap';
 import { useUserLocation } from '@/lib/location';
+import { useTransitStore } from '@/lib/transit-store';
 import { TRA_STATIONS } from '@/lib/mock-data';
 import {
   findNearestRailStation,
@@ -70,36 +71,72 @@ function TraPageInner() {
     }
   }, [ready, coords]);
 
-  const loadTra = useCallback(async () => {
-    try {
+  const { nowMs, triggerFrontendRefresh, getCached, fetchWithCache } =
+    useTransitStore();
+  const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
+
+  const loadTra = useCallback(
+    async (signal?: AbortSignal, force = false) => {
+      const key =
+        mode === 'board'
+          ? `tra:board:${station}`
+          : `tra:od:${from}:${to}`;
       const params =
         mode === 'board'
-          ? `mode=board&station=${station}`
-          : `mode=od&from=${from}&to=${to}`;
-      const res = await fetch(`/api/transit/tra?${params}`, { cache: 'no-store' });
-      const data = await res.json();
-      setTrains(data.trains || []);
-      setLiveVehicles(data.liveVehicles || []);
-      setUpdatedAt(data.updatedAt || '');
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [mode, station, from, to]);
+          ? `mode=board&station=${encodeURIComponent(station)}`
+          : `mode=od&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+
+      const cached = getCached<{
+        trains?: TraTrainRow[];
+        liveVehicles?: LiveRailVehicle[];
+        updatedAt?: string;
+      }>(key);
+
+      if (cached && !force) {
+        setTrains(cached.data.trains || []);
+        setLiveVehicles(cached.data.liveVehicles || []);
+        setUpdatedAt(cached.data.updatedAt || '');
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
+
+      try {
+        const data = await fetchWithCache<{
+          trains?: TraTrainRow[];
+          liveVehicles?: LiveRailVehicle[];
+          updatedAt?: string;
+        }>(key, `/api/transit/tra?${params}`, { signal, force });
+        setTrains(data.trains || []);
+        setLiveVehicles(data.liveVehicles || []);
+        setUpdatedAt(data.updatedAt || '');
+      } catch {
+        // ignore abort/network error
+      } finally {
+        setLoading(false);
+      }
+    },
+    [mode, station, from, to, getCached, fetchWithCache]
+  );
 
   useEffect(() => {
-    if (!ready) return;
+    const controller = new AbortController();
     const t = setTimeout(() => {
-      void loadTra();
+      void loadTra(controller.signal);
     }, 0);
-    return () => clearTimeout(t);
-  }, [ready, loadTra]);
-
-  const handleManualRefresh = useCallback(() => {
-    setLoading(true);
-    void loadTra();
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
   }, [loadTra]);
+
+  const handleBackgroundRefresh = useCallback(() => {
+    void loadTra(undefined, true);
+  }, [loadTra]);
+
+  const handleManualFrontendRefresh = useCallback(() => {
+    setFrontendUpdatedAt(triggerFrontendRefresh());
+  }, [triggerFrontendRefresh]);
 
   const swapOd = () => {
     setFrom(to);
@@ -247,9 +284,10 @@ function TraPageInner() {
               </div>
               <AutoRefreshBadge
                 intervalSeconds={30}
-                onRefresh={handleManualRefresh}
+                onRefresh={handleBackgroundRefresh}
+                onManualRefresh={handleManualFrontendRefresh}
                 isRefreshing={loading}
-                lastUpdated={updatedAt}
+                lastUpdated={frontendUpdatedAt || updatedAt}
               />
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
@@ -302,9 +340,10 @@ function TraPageInner() {
             </select>
             <AutoRefreshBadge
               intervalSeconds={30}
-              onRefresh={handleManualRefresh}
+              onRefresh={handleBackgroundRefresh}
+              onManualRefresh={handleManualFrontendRefresh}
               isRefreshing={loading}
-              lastUpdated={updatedAt}
+              lastUpdated={frontendUpdatedAt || updatedAt}
             />
           </div>
         )}
@@ -330,6 +369,12 @@ function TraPageInner() {
             { dir: 1, title: '逆行 (西部南下往高雄 / 東部北上)' },
           ].map((col) => {
             const list = trains.filter((t) => t.direction === col.dir);
+            const nowDate = nowMs > 0 ? new Date(nowMs) : null;
+            const nowMin = nowDate
+              ? nowDate.getHours() * 60 +
+                nowDate.getMinutes() +
+                nowDate.getSeconds() / 60
+              : null;
             return (
               <div
                 key={col.dir}
@@ -339,7 +384,26 @@ function TraPageInner() {
                   {col.title}
                 </div>
                 <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {list.map((t) => (
+                  {list.map((t) => {
+                    const [hh, mm] = t.departureTime.split(':').map(Number);
+                    const estMin =
+                      Number.isFinite(hh) && Number.isFinite(mm)
+                        ? hh * 60 + mm + (t.delayMinutes || 0)
+                        : null;
+                    let diffMin =
+                      estMin !== null && nowMin !== null
+                        ? Math.round(estMin - nowMin)
+                        : null;
+                    if (diffMin !== null && diffMin < -720) diffMin += 1440;
+                    const etaLabel =
+                      diffMin === null
+                        ? ''
+                        : diffMin <= 0
+                          ? ' · 即將/已發車'
+                          : diffMin <= 60
+                            ? ` · 約 ${diffMin} 分後`
+                            : '';
+                    return (
                     <li
                       key={`${t.trainNo}-${t.departureTime}`}
                       className="flex items-center justify-between px-4 py-3"
@@ -357,7 +421,7 @@ function TraPageInner() {
                             {t.trainNo} 次 · 往 {t.destinationStation}
                           </div>
                           <div className="text-xs text-slate-500">
-                            表定 {t.departureTime} 開車
+                            表定 {t.departureTime} 開車{etaLabel}
                           </div>
                         </div>
                       </div>
@@ -371,7 +435,8 @@ function TraPageInner() {
                         {t.statusText}
                       </span>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               </div>
             );

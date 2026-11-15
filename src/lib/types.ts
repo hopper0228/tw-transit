@@ -50,6 +50,7 @@ export interface BusRouteDetail {
     nearStopSeq: number;
   }[];
   updatedAt: string;
+  sourceUpdatedAt?: number;
   source: DataSourceMode;
 }
 
@@ -77,6 +78,7 @@ export interface MetroStationDetail {
   platforms: MetroPlatformArrival[];
   liveVehicles?: LiveRailVehicle[];
   updatedAt: string;
+  sourceUpdatedAt?: number;
   source: DataSourceMode;
 }
 

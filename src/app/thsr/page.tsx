@@ -7,6 +7,7 @@ import { ArrowLeftRight, List, Map as MapIcon, MapPin, Zap } from 'lucide-react'
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
 import type { MapMarker } from '@/components/LeafletMap';
 import { useUserLocation } from '@/lib/location';
+import { useTransitStore } from '@/lib/transit-store';
 import { THSR_STATIONS } from '@/lib/mock-data';
 import {
   findNearestRailStation,
@@ -73,34 +74,68 @@ function ThsrPageInner() {
     }
   }, [ready, coords]);
 
-  const loadThsr = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/transit/thsr?from=${from}&to=${to}`, {
-        cache: 'no-store',
-      });
-      const data = await res.json();
-      setTrains(data.trains || []);
-      setLiveVehicles(data.liveVehicles || []);
-      setUpdatedAt(data.updatedAt || '');
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [from, to]);
+  const { nowMs, triggerFrontendRefresh, getCached, fetchWithCache } =
+    useTransitStore();
+  const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
+
+  const loadThsr = useCallback(
+    async (signal?: AbortSignal, force = false) => {
+      const key = `thsr:${from}:${to}`;
+      const cached = getCached<{
+        trains?: ThsrTrainRow[];
+        liveVehicles?: LiveRailVehicle[];
+        updatedAt?: string;
+      }>(key);
+
+      if (cached && !force) {
+        setTrains(cached.data.trains || []);
+        setLiveVehicles(cached.data.liveVehicles || []);
+        setUpdatedAt(cached.data.updatedAt || '');
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
+
+      try {
+        const data = await fetchWithCache<{
+          trains?: ThsrTrainRow[];
+          liveVehicles?: LiveRailVehicle[];
+          updatedAt?: string;
+        }>(
+          key,
+          `/api/transit/thsr?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+          { signal, force }
+        );
+        setTrains(data.trains || []);
+        setLiveVehicles(data.liveVehicles || []);
+        setUpdatedAt(data.updatedAt || '');
+      } catch {
+        // ignore abort/network error
+      } finally {
+        setLoading(false);
+      }
+    },
+    [from, to, getCached, fetchWithCache]
+  );
 
   useEffect(() => {
-    if (!ready) return;
+    const controller = new AbortController();
     const t = setTimeout(() => {
-      void loadThsr();
+      void loadThsr(controller.signal);
     }, 0);
-    return () => clearTimeout(t);
-  }, [ready, loadThsr]);
-
-  const handleManualRefresh = useCallback(() => {
-    setLoading(true);
-    void loadThsr();
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
   }, [loadThsr]);
+
+  const handleBackgroundRefresh = useCallback(() => {
+    void loadThsr(undefined, true);
+  }, [loadThsr]);
+
+  const handleManualFrontendRefresh = useCallback(() => {
+    setFrontendUpdatedAt(triggerFrontendRefresh());
+  }, [triggerFrontendRefresh]);
 
   const thsrMapData = useMemo(() => {
     const stationsWithCoord = THSR_STATIONS.map((s) => {
@@ -231,9 +266,10 @@ function ThsrPageInner() {
 
           <AutoRefreshBadge
             intervalSeconds={30}
-            onRefresh={handleManualRefresh}
+            onRefresh={handleBackgroundRefresh}
+            onManualRefresh={handleManualFrontendRefresh}
             isRefreshing={loading}
-            lastUpdated={updatedAt}
+            lastUpdated={frontendUpdatedAt || updatedAt}
           />
         </div>
       </div>
@@ -254,7 +290,28 @@ function ThsrPageInner() {
       ) : (
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-900">
         <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-          {trains.map((t) => (
+          {trains.map((t) => {
+            const nowDate = nowMs > 0 ? new Date(nowMs) : null;
+            const nowMin = nowDate
+              ? nowDate.getHours() * 60 +
+                nowDate.getMinutes() +
+                nowDate.getSeconds() / 60
+              : null;
+            const [hh, mm] = t.departureTime.split(':').map(Number);
+            let diffMin =
+              nowMin !== null && Number.isFinite(hh) && Number.isFinite(mm)
+                ? Math.round(hh * 60 + mm - nowMin)
+                : null;
+            if (diffMin !== null && diffMin < -720) diffMin += 1440;
+            const etaLabel =
+              diffMin === null
+                ? ''
+                : diffMin <= 0
+                  ? ' · 即將/已發車'
+                  : diffMin <= 60
+                    ? ` · 約 ${diffMin} 分後`
+                    : '';
+            return (
             <li
               key={t.trainNo}
               className="flex flex-wrap items-center justify-between gap-4 px-5 py-4"
@@ -276,6 +333,7 @@ function ThsrPageInner() {
                   <div className="text-xs text-slate-500">
                     {t.originStation} → {t.destinationStation} · 車程{' '}
                     {t.durationMinutes} 分鐘 · 自由座 {t.nonReservedCars}
+                    {etaLabel}
                   </div>
                 </div>
               </div>
@@ -291,7 +349,8 @@ function ThsrPageInner() {
                 </div>
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       </div>
       )}

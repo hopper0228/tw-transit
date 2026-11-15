@@ -14,6 +14,7 @@ export async function GET(req: NextRequest) {
       trains: result.trains,
       liveVehicles: result.liveVehicles,
       updatedAt: result.updatedAt,
+      sourceUpdatedAt: result.sourceUpdatedAt,
       source: result.source,
     },
     { headers: { 'Cache-Control': 'no-store, max-age=0' } }

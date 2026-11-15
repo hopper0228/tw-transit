@@ -4,10 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, RefreshCw } from 'lucide-react';
 
 interface AutoRefreshBadgeProps {
-  /** 每幾秒自動更新一次，預設 15 秒 */
+  /** 每幾秒自動向後端同步一次，預設 30 秒 */
   intervalSeconds?: number;
-  /** 觸發資料更新的回呼函式 */
+  /** 倒數歸零時觸發的後端背景同步函式 */
   onRefresh: () => void;
+  /** 使用者手動點擊時觸發的前端本地即時重算函式（不呼叫後端 API） */
+  onManualRefresh?: () => void;
   /** 目前是否正在向後端請求資料 */
   isRefreshing: boolean;
   /** 最後更新時間字串 (用來偵測資料剛完成更新) */
@@ -15,8 +17,9 @@ interface AutoRefreshBadgeProps {
 }
 
 export default function AutoRefreshBadge({
-  intervalSeconds = 15,
+  intervalSeconds = 30,
   onRefresh,
+  onManualRefresh,
   isRefreshing,
   lastUpdated,
 }: AutoRefreshBadgeProps) {
@@ -85,6 +88,12 @@ export default function AutoRefreshBadge({
   }, [isRefreshing]);
 
   const handleManualClick = () => {
+    if (onManualRefresh) {
+      onManualRefresh();
+      setJustUpdated(true);
+      setTimeout(() => setJustUpdated(false), 1800);
+      return;
+    }
     setCountdown(intervalSeconds);
     onRefreshRef.current();
   };
@@ -98,7 +107,11 @@ export default function AutoRefreshBadge({
     <button
       type="button"
       onClick={handleManualClick}
-      title="點擊立即更新資料（分頁背景時自動暫停輪詢）"
+      title={
+        onManualRefresh
+          ? '點擊立即重算前端最新時間與狀態（不重打後端 API；背景每 30 秒自動同步）'
+          : '點擊立即更新資料（分頁背景時自動暫停輪詢）'
+      }
       className={`group relative overflow-hidden rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all ${
         justUpdated
           ? 'border-emerald-300 bg-emerald-50 text-emerald-700 shadow-xs dark:border-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'

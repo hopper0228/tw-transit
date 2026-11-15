@@ -17,6 +17,7 @@ import {
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
 import LocationBanner from '@/components/LocationBanner';
 import { formatDistance, useUserLocation } from '@/lib/location';
+import { useTransitStore } from '@/lib/transit-store';
 import { BUS_CITIES } from '@/lib/mock-data';
 import { BusRouteDetail, BusRouteInfo, BusStopStatus } from '@/lib/types';
 import { isFavorite, toggleFavorite } from '@/lib/favorites';
@@ -38,7 +39,7 @@ const BUS_KEYPAD = [
   '0', '小', '內科', '清除',
 ];
 
-function formatEtaBadge(stop: BusStopStatus) {
+function formatEtaBadge(stop: BusStopStatus, offsetSec = 0) {
   if (stop.estimateSeconds === null || stop.stopStatus !== 0) {
     return {
       text: stop.stopStatus === 3 ? '末班已過' : '尚未發車',
@@ -46,7 +47,7 @@ function formatEtaBadge(stop: BusStopStatus) {
         'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400',
     };
   }
-  const sec = stop.estimateSeconds;
+  const sec = Math.max(0, stop.estimateSeconds - offsetSec);
   if (sec <= 45) {
     return {
       text: '進站中',
@@ -55,8 +56,10 @@ function formatEtaBadge(stop: BusStopStatus) {
   }
   const min = Math.ceil(sec / 60);
   if (min <= 3) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
     return {
-      text: `${min} 分`,
+      text: `${m}分${String(s).padStart(2, '0')}秒`,
       className: 'bg-orange-500 text-white shadow-xs',
     };
   }
@@ -72,7 +75,11 @@ function BusPageInner() {
   const initialCity = searchParams.get('city') || 'Taipei';
   const initialRoute = searchParams.get('route');
 
-  const { coords, status: locStatus, ready, refreshLocation } = useUserLocation();
+  const { coords, status: locStatus, refreshLocation } = useUserLocation();
+  const { nowMs, triggerFrontendRefresh, getCached, fetchWithCache } =
+    useTransitStore();
+  const [detailFetchedAt, setDetailFetchedAt] = useState<number>(0);
+  const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
   const [city, setCity] = useState(initialCity);
   const [query, setQuery] = useState('');
   const [showKeypad, setShowKeypad] = useState(false);
@@ -88,46 +95,70 @@ function BusPageInner() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [faved, setFaved] = useState(false);
 
-  // 取得路線清單 (等定位狀態 ready 後只請求 1 次，帶入裝置座標由近到遠排序)
+  // 取得路線清單（立即載入預設/快取，定位取得後自動背景依距離重排）
   useEffect(() => {
-    if (!ready) return;
-    let active = true;
+    const controller = new AbortController();
+    const key = `bus:list:${city}:${query}:${coords ? `${coords.lat.toFixed(3)},${coords.lng.toFixed(3)}` : 'none'}`;
+    const qs = new URLSearchParams({ city, q: query });
+    if (coords) {
+      qs.set('lat', String(coords.lat));
+      qs.set('lng', String(coords.lng));
+    }
+
     const t = setTimeout(() => {
-      if (active) setLoadingList(true);
-      const qs = new URLSearchParams({ city, q: query });
-      if (coords) {
-        qs.set('lat', String(coords.lat));
-        qs.set('lng', String(coords.lng));
+      const cached = getCached<{ routes?: BusRouteInfo[] }>(key);
+      if (cached) {
+        setRoutes(cached.data.routes || []);
+        setLoadingList(false);
+      } else {
+        setLoadingList(true);
       }
-      fetch(`/api/transit/bus?${qs.toString()}`)
-        .then((res) => res.json())
+
+      fetchWithCache<{ routes?: BusRouteInfo[] }>(
+        key,
+        `/api/transit/bus?${qs.toString()}`,
+        { signal: controller.signal }
+      )
         .then((data) => {
-          if (active) setRoutes(data.routes || []);
+          setRoutes(data.routes || []);
         })
         .catch(() => {
-          if (active) setRoutes([]);
+          // ignore abort
         })
         .finally(() => {
-          if (active) setLoadingList(false);
+          setLoadingList(false);
         });
     }, 0);
+
     return () => {
-      active = false;
       clearTimeout(t);
+      controller.abort();
     };
-  }, [ready, city, query, coords]);
+  }, [city, query, coords, getCached, fetchWithCache]);
 
   const loadDetail = useCallback(
-    async (routeName: string, dir: 0 | 1) => {
+    async (routeName: string, dir: 0 | 1, signal?: AbortSignal, force = false) => {
+      const key = `bus:detail:${selectedRouteCity}:${routeName}:${dir}`;
+      const cached = getCached<BusRouteDetail>(key);
+      if (cached && !force) {
+        setDetail(cached.data);
+        setDetailFetchedAt(cached.fetchedAt);
+        setFaved(isFavorite(`bus-${cached.data.route.city}-${cached.data.route.routeName}`));
+        setLoadingDetail(false);
+      } else {
+        setLoadingDetail(true);
+      }
+
       try {
-        const res = await fetch(
+        const data = await fetchWithCache<BusRouteDetail>(
+          key,
           `/api/transit/bus?city=${encodeURIComponent(selectedRouteCity)}&route=${encodeURIComponent(
             routeName
           )}&dir=${dir}`,
-          { cache: 'no-store' }
+          { signal, force }
         );
-        const data: BusRouteDetail = await res.json();
         setDetail(data);
+        setDetailFetchedAt(Date.now());
         setFaved(isFavorite(`bus-${data.route.city}-${data.route.routeName}`));
       } catch {
         // ignore
@@ -135,22 +166,29 @@ function BusPageInner() {
         setLoadingDetail(false);
       }
     },
-    [selectedRouteCity]
+    [selectedRouteCity, getCached, fetchWithCache]
   );
 
   useEffect(() => {
     if (!selectedRoute) return;
+    const controller = new AbortController();
     const t = setTimeout(() => {
-      void loadDetail(selectedRoute, direction);
+      void loadDetail(selectedRoute, direction, controller.signal);
     }, 0);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
   }, [selectedRoute, direction, loadDetail]);
 
-  const handleManualDetailRefresh = useCallback(() => {
+  const handleBackgroundDetailRefresh = useCallback(() => {
     if (!selectedRoute) return;
-    setLoadingDetail(true);
-    void loadDetail(selectedRoute, direction);
+    void loadDetail(selectedRoute, direction, undefined, true);
   }, [selectedRoute, direction, loadDetail]);
+
+  const handleManualFrontendRefresh = useCallback(() => {
+    setFrontendUpdatedAt(triggerFrontendRefresh());
+  }, [triggerFrontendRefresh]);
 
   const handleKeypadClick = (key: string) => {
     if (key === '清除') {
@@ -283,9 +321,10 @@ function BusPageInner() {
 
               <AutoRefreshBadge
                 intervalSeconds={30}
-                onRefresh={handleManualDetailRefresh}
+                onRefresh={handleBackgroundDetailRefresh}
+                onManualRefresh={handleManualFrontendRefresh}
                 isRefreshing={loadingDetail}
-                lastUpdated={detail?.updatedAt}
+                lastUpdated={frontendUpdatedAt || detail?.updatedAt}
               />
             </div>
           </div>
@@ -338,7 +377,12 @@ function BusPageInner() {
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-900">
             <ul className="divide-y divide-slate-100 dark:divide-slate-800/80">
               {detail.stops.map((stop, idx) => {
-                const badge = formatEtaBadge(stop);
+                const baseTs = detail.sourceUpdatedAt || detailFetchedAt;
+                const offsetSec =
+                  nowMs > 0 && baseTs > 0
+                    ? Math.max(0, Math.floor((nowMs - baseTs) / 1000))
+                    : 0;
+                const badge = formatEtaBadge(stop, offsetSec);
                 const isFirst = idx === 0;
                 const isLast = idx === detail.stops.length - 1;
 

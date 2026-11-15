@@ -53,6 +53,14 @@ function parseHhmmToMinutes(hhmm: string): number {
   return h * 60 + m;
 }
 
+function parseSourceTimeMs(iso?: string): number {
+  if (iso) {
+    const ms = Date.parse(iso);
+    if (Number.isFinite(ms)) return ms;
+  }
+  return Date.now();
+}
+
 // ==========================================
 // 1. 捷運即時看板與真實列車位置 (TDX LiveBoard)
 // ==========================================
@@ -66,6 +74,8 @@ interface TdxMetroLiveBoard {
   DestinationStationName?: { Zh_tw?: string };
   EstimateTime?: number;
   ServiceStatus?: number;
+  SrcUpdateTime?: string;
+  UpdateTime?: string;
 }
 
 interface TdxMetroStationTimetable {
@@ -193,7 +203,7 @@ export async function getRealMetroStation(
     const [liveRaw, ttList] = await Promise.all([
       fetchTdx<TdxMetroLiveBoard[]>(
         `/v2/Rail/Metro/LiveBoard/${sys.id}?%24format=JSON`,
-        25
+        15
       ).catch(() => [] as TdxMetroLiveBoard[]),
       getMetroStationTables(sys.id, matchedStation.id),
     ]);
@@ -426,6 +436,11 @@ export async function getRealMetroStation(
       }
     }
 
+    const firstLive = stationRows[0] || list[0];
+    const sourceUpdatedAt = parseSourceTimeMs(
+      firstLive?.SrcUpdateTime || firstLive?.UpdateTime
+    );
+
     return {
       systemId: sys.id,
       systemName: sys.name,
@@ -437,6 +452,7 @@ export async function getRealMetroStation(
       platforms,
       liveVehicles,
       updatedAt: timeStr,
+      sourceUpdatedAt,
       source: 'tdx',
     };
   } catch {
@@ -645,6 +661,7 @@ export async function getRealTraData(
   trains: TraTrainRow[];
   liveVehicles: LiveRailVehicle[];
   updatedAt: string;
+  sourceUpdatedAt: number;
   source: DataSourceMode;
 }> {
   const { dateStr, timeStr, hhmm } = getTaipeiNow();
@@ -654,18 +671,19 @@ export async function getRealTraData(
       trains: [],
       liveVehicles: [],
       updatedAt: timeStr,
+      sourceUpdatedAt: Date.now(),
       source: 'tdx',
     };
   }
 
   const [liveRes, boardRes, dailyIndex] = await Promise.allSettled([
-    fetchTdx<{ TrainLiveBoards?: TdxTraTrainLive[] }>(
+    fetchTdx<{ UpdateTime?: string; SrcUpdateTime?: string; TrainLiveBoards?: TdxTraTrainLive[] }>(
       '/v3/Rail/TRA/TrainLiveBoard?%24format=JSON',
-      25
+      15
     ),
-    fetchTdx<{ StationLiveBoards?: TdxTraStationBoard[] }>(
+    fetchTdx<{ UpdateTime?: string; SrcUpdateTime?: string; StationLiveBoards?: TdxTraStationBoard[] }>(
       '/v3/Rail/TRA/StationLiveBoard?%24format=JSON',
-      25
+      15
     ),
     getTraDailyIndex(dateStr),
   ]);
@@ -797,10 +815,16 @@ export async function getRealTraData(
     trains = (upcoming.length > 0 ? upcoming : mapped).slice(0, 20);
   }
 
+  const sourceUpdatedAt =
+    liveRes.status === 'fulfilled'
+      ? parseSourceTimeMs(liveRes.value?.SrcUpdateTime || liveRes.value?.UpdateTime)
+      : Date.now();
+
   return {
     trains,
     liveVehicles,
     updatedAt: timeStr,
+    sourceUpdatedAt,
     source: 'tdx',
   };
 }
@@ -850,6 +874,7 @@ export async function getRealThsrData(
   trains: ThsrTrainRow[];
   liveVehicles: LiveRailVehicle[];
   updatedAt: string;
+  sourceUpdatedAt: number;
   source: DataSourceMode;
 }> {
   const { timeStr, hhmm, minutesOfDay } = getTaipeiNow();
@@ -859,6 +884,7 @@ export async function getRealThsrData(
       trains: [],
       liveVehicles: [],
       updatedAt: timeStr,
+      sourceUpdatedAt: Date.now(),
       source: 'tdx',
     };
   }
@@ -962,6 +988,7 @@ export async function getRealThsrData(
       trains: (upcoming.length > 0 ? upcoming : odTrains).slice(0, 20),
       liveVehicles,
       updatedAt: timeStr,
+      sourceUpdatedAt: Date.now(),
       source: 'tdx',
     };
   } catch {
@@ -969,6 +996,7 @@ export async function getRealThsrData(
       trains: [],
       liveVehicles: [],
       updatedAt: timeStr,
+      sourceUpdatedAt: Date.now(),
       source: 'tdx',
     };
   }

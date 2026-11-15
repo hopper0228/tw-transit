@@ -227,6 +227,7 @@ export async function GET(req: NextRequest) {
           shape: stops.map((s) => [s.lat, s.lng]),
           vehicles,
           updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
+          sourceUpdatedAt: Date.now(),
           source: 'tdx',
         };
 

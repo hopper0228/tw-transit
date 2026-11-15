@@ -7,6 +7,7 @@ import { List, Map as MapIcon, MapPin, Search, Star, TramFront } from 'lucide-re
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
 import type { MapMarker } from '@/components/LeafletMap';
 import { useUserLocation } from '@/lib/location';
+import { useTransitStore } from '@/lib/transit-store';
 import { METRO_SYSTEMS } from '@/lib/mock-data';
 import {
   findNearestMetroStation,
@@ -79,45 +80,59 @@ function MetroPageInner() {
     }
   }, [ready, coords]);
 
-  const [elapsedSec, setElapsedSec] = useState(0);
+  const { nowMs, triggerFrontendRefresh, getCached, fetchWithCache } =
+    useTransitStore();
+  const [fetchedAt, setFetchedAt] = useState<number>(0);
+  const [frontendUpdatedAt, setFrontendUpdatedAt] = useState<string>('');
 
-  const loadStation = useCallback(async (sys: string, st: string) => {
-    try {
-      const res = await fetch(
-        `/api/transit/metro?system=${encodeURIComponent(sys)}&station=${encodeURIComponent(st)}`,
-        { cache: 'no-store' }
-      );
-      const data: MetroStationDetail = await res.json();
-      setDetail(data);
-      setElapsedSec(0);
-      setFaved(isFavorite(`metro-${data.systemId}-${data.stationId}`));
-    } catch {
-      // ignore error
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const loadStation = useCallback(
+    async (sys: string, st: string, signal?: AbortSignal, force = false) => {
+      const key = `metro:${sys}:${st}`;
+      const cached = getCached<MetroStationDetail>(key);
+      if (cached && !force) {
+        setDetail(cached.data);
+        setFetchedAt(cached.fetchedAt);
+        setFaved(isFavorite(`metro-${cached.data.systemId}-${cached.data.stationId}`));
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
+      try {
+        const data = await fetchWithCache<MetroStationDetail>(
+          key,
+          `/api/transit/metro?system=${encodeURIComponent(sys)}&station=${encodeURIComponent(st)}`,
+          { signal, force }
+        );
+        setDetail(data);
+        setFetchedAt(Date.now());
+        setFaved(isFavorite(`metro-${data.systemId}-${data.stationId}`));
+      } catch {
+        // ignore abort/network error
+      } finally {
+        setLoading(false);
+      }
+    },
+    [getCached, fetchWithCache]
+  );
 
   useEffect(() => {
-    if (!detail) return;
-    const t = setInterval(() => {
-      setElapsedSec((prev) => (prev < 60 ? prev + 1 : prev));
-    }, 1000);
-    return () => clearInterval(t);
-  }, [detail]);
-
-  useEffect(() => {
-    if (!ready) return;
+    const controller = new AbortController();
     const t = setTimeout(() => {
-      void loadStation(systemId, stationId);
+      void loadStation(systemId, stationId, controller.signal);
     }, 0);
-    return () => clearTimeout(t);
-  }, [ready, systemId, stationId, loadStation]);
-
-  const handleManualRefresh = useCallback(() => {
-    setLoading(true);
-    void loadStation(systemId, stationId);
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
   }, [systemId, stationId, loadStation]);
+
+  const handleBackgroundRefresh = useCallback(() => {
+    void loadStation(systemId, stationId, undefined, true);
+  }, [systemId, stationId, loadStation]);
+
+  const handleManualFrontendRefresh = useCallback(() => {
+    setFrontendUpdatedAt(triggerFrontendRefresh());
+  }, [triggerFrontendRefresh]);
 
   const handleSystemChange = (newSysId: string) => {
     hasAutoSelectedRef.current = true;
@@ -396,9 +411,10 @@ function MetroPageInner() {
               </button>
               <AutoRefreshBadge
                 intervalSeconds={30}
-                onRefresh={handleManualRefresh}
+                onRefresh={handleBackgroundRefresh}
+                onManualRefresh={handleManualFrontendRefresh}
                 isRefreshing={loading}
-                lastUpdated={detail.updatedAt}
+                lastUpdated={frontendUpdatedAt || detail.updatedAt}
               />
             </div>
           </div>
@@ -418,13 +434,18 @@ function MetroPageInner() {
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {detail.platforms.map((plat) => {
+              const baseTs = detail.sourceUpdatedAt || fetchedAt;
+              const offsetSec =
+                nowMs > 0 && baseTs > 0
+                  ? Math.max(0, Math.floor((nowMs - baseTs) / 1000))
+                  : 0;
               const hasRealNext = plat.nextTrainSeconds >= 0;
               const liveNext = hasRealNext
-                ? Math.max(0, plat.nextTrainSeconds - elapsedSec)
+                ? Math.max(0, plat.nextTrainSeconds - offsetSec)
                 : -1;
               const liveFollowing =
                 plat.followingTrainSeconds > 0
-                  ? Math.max(0, plat.followingTrainSeconds - elapsedSec)
+                  ? Math.max(0, plat.followingTrainSeconds - offsetSec)
                   : 0;
               const destLabel = plat.destination.startsWith('往')
                 ? plat.destination

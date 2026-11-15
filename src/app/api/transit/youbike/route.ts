@@ -64,6 +64,7 @@ export async function GET(req: NextRequest) {
         stations,
         total,
         updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
+        sourceUpdatedAt: Date.now(),
         source: 'opendata',
       },
       { headers: { 'Cache-Control': 'no-store, max-age=0' } }
@@ -74,6 +75,7 @@ export async function GET(req: NextRequest) {
         stations: [],
         total: 0,
         updatedAt: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
+        sourceUpdatedAt: Date.now(),
         source: 'opendata',
       },
       { headers: { 'Cache-Control': 'no-store, max-age=0' } }

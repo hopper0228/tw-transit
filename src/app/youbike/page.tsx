@@ -7,6 +7,7 @@ import { Bike, List, Map as MapIcon, MapPin, Search } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
 import LocationBanner from '@/components/LocationBanner';
 import { formatDistance, useUserLocation } from '@/lib/location';
+import { useTransitStore } from '@/lib/transit-store';
 import { YouBikeStation } from '@/lib/types';
 import type { MapBounds, MapMarker } from '@/components/LeafletMap';
 
@@ -28,7 +29,10 @@ const DISTANCE_FILTERS = [
 
 function YouBikePageInner() {
   const searchParams = useSearchParams();
-  const { coords, status: locStatus, ready, refreshLocation } = useUserLocation();
+  const { coords, status: locStatus, refreshLocation } = useUserLocation();
+  const { triggerFrontendRefresh, getCached, fetchWithCache } =
+    useTransitStore();
+  const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
 
   const [maxDistance, setMaxDistance] = useState<number>(3000);
   const [query, setQuery] = useState(searchParams.get('q') || '');
@@ -39,9 +43,8 @@ function YouBikePageInner() {
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const loadStations = useCallback(async () => {
-    if (!ready) return;
-    try {
+  const loadStations = useCallback(
+    async (signal?: AbortSignal, force = false) => {
       const qs = new URLSearchParams({ q: query });
       if (coords) {
         qs.set('lat', String(coords.lat));
@@ -56,30 +59,59 @@ function YouBikePageInner() {
       } else if (coords && maxDistance > 0 && !query.trim()) {
         qs.set('maxDistance', String(maxDistance));
       }
-      const res = await fetch(`/api/transit/youbike?${qs.toString()}`);
-      const data = await res.json();
-      setStations(data.stations || []);
-      setTotalCount(data.total ?? (data.stations || []).length);
-      setUpdatedAt(data.updatedAt || '');
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [ready, query, coords, viewMode, mapBounds, maxDistance]);
+
+      const key = `youbike:${qs.toString()}`;
+      const cached = getCached<{
+        stations?: YouBikeStation[];
+        total?: number;
+        updatedAt?: string;
+      }>(key);
+
+      if (cached && !force) {
+        setStations(cached.data.stations || []);
+        setTotalCount(cached.data.total ?? (cached.data.stations || []).length);
+        setUpdatedAt(cached.data.updatedAt || '');
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
+
+      try {
+        const data = await fetchWithCache<{
+          stations?: YouBikeStation[];
+          total?: number;
+          updatedAt?: string;
+        }>(key, `/api/transit/youbike?${qs.toString()}`, { signal, force });
+        setStations(data.stations || []);
+        setTotalCount(data.total ?? (data.stations || []).length);
+        setUpdatedAt(data.updatedAt || '');
+      } catch {
+        // ignore
+      } finally {
+        setLoading(false);
+      }
+    },
+    [query, coords, viewMode, mapBounds, maxDistance, getCached, fetchWithCache]
+  );
 
   useEffect(() => {
-    if (!ready) return;
+    const controller = new AbortController();
     const t = setTimeout(() => {
-      void loadStations();
+      void loadStations(controller.signal);
     }, 0);
-    return () => clearTimeout(t);
-  }, [ready, loadStations]);
-
-  const handleManualRefresh = useCallback(() => {
-    setLoading(true);
-    void loadStations();
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
   }, [loadStations]);
+
+  const handleBackgroundRefresh = useCallback(() => {
+    void loadStations(undefined, true);
+  }, [loadStations]);
+
+  const handleManualFrontendRefresh = useCallback(() => {
+    setFrontendUpdatedAt(triggerFrontendRefresh());
+  }, [triggerFrontendRefresh]);
 
   const markers: MapMarker[] = stations.map((st) => ({
     id: st.stationUid,
@@ -109,10 +141,11 @@ function YouBikePageInner() {
 
         <div className="flex items-center gap-2">
           <AutoRefreshBadge
-            intervalSeconds={15}
-            onRefresh={handleManualRefresh}
+            intervalSeconds={30}
+            onRefresh={handleBackgroundRefresh}
+            onManualRefresh={handleManualFrontendRefresh}
             isRefreshing={loading}
-            lastUpdated={updatedAt}
+            lastUpdated={frontendUpdatedAt || updatedAt}
           />
           <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
             <button

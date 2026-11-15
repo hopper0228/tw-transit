@@ -65,7 +65,7 @@ export function useUserLocation() {
         setStatus('denied');
         setReady(true);
       },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+      { enableHighAccuracy: false, timeout: 3000, maximumAge: 60000 }
     );
   }, []);
 

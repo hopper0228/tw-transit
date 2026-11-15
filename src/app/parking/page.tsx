@@ -14,6 +14,7 @@ import {
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
 import LocationBanner from '@/components/LocationBanner';
 import { formatDistance, useUserLocation } from '@/lib/location';
+import { useTransitStore } from '@/lib/transit-store';
 import { ParkingLot } from '@/lib/types';
 import type { MapBounds, MapMarker } from '@/components/LeafletMap';
 
@@ -35,7 +36,10 @@ const DISTANCE_FILTERS = [
 
 function ParkingPageInner() {
   const searchParams = useSearchParams();
-  const { coords, status: locStatus, ready, refreshLocation } = useUserLocation();
+  const { coords, status: locStatus, refreshLocation } = useUserLocation();
+  const { triggerFrontendRefresh, getCached, fetchWithCache } =
+    useTransitStore();
+  const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
 
   const [maxDistance, setMaxDistance] = useState<number>(3000);
   const [query, setQuery] = useState(searchParams.get('q') || '');
@@ -47,9 +51,8 @@ function ParkingPageInner() {
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const loadLots = useCallback(async () => {
-    if (!ready) return;
-    try {
+  const loadLots = useCallback(
+    async (signal?: AbortSignal, force = false) => {
       const qs = new URLSearchParams({
         q: query,
         onlyAvailable: String(onlyAvailable),
@@ -66,30 +69,68 @@ function ParkingPageInner() {
       } else if (coords && maxDistance > 0 && !query.trim()) {
         qs.set('maxDistance', String(maxDistance));
       }
-      const res = await fetch(`/api/transit/parking?${qs.toString()}`);
-      const data = await res.json();
-      setLots(data.lots || []);
-      setTotalCount(data.total ?? (data.lots || []).length);
-      setUpdatedAt(data.updatedAt || '');
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [ready, query, onlyAvailable, coords, viewMode, mapBounds, maxDistance]);
+
+      const key = `parking:${qs.toString()}`;
+      const cached = getCached<{
+        lots?: ParkingLot[];
+        total?: number;
+        updatedAt?: string;
+      }>(key);
+
+      if (cached && !force) {
+        setLots(cached.data.lots || []);
+        setTotalCount(cached.data.total ?? (cached.data.lots || []).length);
+        setUpdatedAt(cached.data.updatedAt || '');
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
+
+      try {
+        const data = await fetchWithCache<{
+          lots?: ParkingLot[];
+          total?: number;
+          updatedAt?: string;
+        }>(key, `/api/transit/parking?${qs.toString()}`, { signal, force });
+        setLots(data.lots || []);
+        setTotalCount(data.total ?? (data.lots || []).length);
+        setUpdatedAt(data.updatedAt || '');
+      } catch {
+        // ignore
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      query,
+      onlyAvailable,
+      coords,
+      viewMode,
+      mapBounds,
+      maxDistance,
+      getCached,
+      fetchWithCache,
+    ]
+  );
 
   useEffect(() => {
-    if (!ready) return;
+    const controller = new AbortController();
     const t = setTimeout(() => {
-      void loadLots();
+      void loadLots(controller.signal);
     }, 0);
-    return () => clearTimeout(t);
-  }, [ready, loadLots]);
-
-  const handleManualRefresh = useCallback(() => {
-    setLoading(true);
-    void loadLots();
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
   }, [loadLots]);
+
+  const handleBackgroundRefresh = useCallback(() => {
+    void loadLots(undefined, true);
+  }, [loadLots]);
+
+  const handleManualFrontendRefresh = useCallback(() => {
+    setFrontendUpdatedAt(triggerFrontendRefresh());
+  }, [triggerFrontendRefresh]);
 
   const markers: MapMarker[] = lots.map((lot) => ({
     id: lot.carParkId,
@@ -132,10 +173,11 @@ function ParkingPageInner() {
 
         <div className="flex items-center gap-2">
           <AutoRefreshBadge
-            intervalSeconds={15}
-            onRefresh={handleManualRefresh}
+            intervalSeconds={30}
+            onRefresh={handleBackgroundRefresh}
+            onManualRefresh={handleManualFrontendRefresh}
             isRefreshing={loading}
-            lastUpdated={updatedAt}
+            lastUpdated={frontendUpdatedAt || updatedAt}
           />
           <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
             <button
