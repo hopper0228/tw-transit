@@ -629,14 +629,13 @@ export async function getRealMetroSystemSnapshot(
   }
 
   try {
-    const [liveRaw, byStationTables, freqList] = await Promise.all([
-      fetchTdx<TdxMetroLiveBoard[]>(
-        `/v2/Rail/Metro/LiveBoard/${sys.id}?%24format=JSON`,
-        15
-      ).catch(() => [] as TdxMetroLiveBoard[]),
-      getMetroSystemTables(sys.id),
-      getMetroSystemFrequencies(sys.id),
-    ]);
+    // 冷啟動時依序暖機時刻表與班距快取（6 小時有效），避免與 LiveBoard 併發觸發 TDX 429
+    const byStationTables = await getMetroSystemTables(sys.id);
+    const freqList = await getMetroSystemFrequencies(sys.id);
+    const liveRaw = await fetchTdx<TdxMetroLiveBoard[]>(
+      `/v2/Rail/Metro/LiveBoard/${sys.id}?%24format=JSON`,
+      15
+    ).catch(() => [] as TdxMetroLiveBoard[]);
 
     const list = Array.isArray(liveRaw) ? liveRaw : [];
     const rowsByStationId = new Map<string, TdxMetroLiveBoard[]>();
