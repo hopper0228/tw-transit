@@ -779,6 +779,38 @@ export async function getRealTraData(
     };
 
     trains = [...pickBound('north'), ...pickBound('south')];
+
+    // 若全線時刻表因 TDX 429 暫時無法取得，降級改用該站即時電子看板作為備援，避免回傳空陣列
+    if (trains.length === 0 && !index) {
+      try {
+        const boardRes = await fetchTdx<{ StationLiveBoards?: TdxTraStationBoard[] }>(
+          `/v3/Rail/TRA/StationLiveBoard/Station/${encodeURIComponent(station)}?%24format=JSON`,
+          20
+        );
+        const rows = Array.isArray(boardRes?.StationLiveBoards) ? boardRes.StationLiveBoards : [];
+        trains = rows.map((item) => {
+          const direction = (item.Direction === 1 ? 1 : 0) as 0 | 1;
+          const delay = item.DelayTime ?? delayMap.get(item.TrainNo) ?? 0;
+          const dep = (item.ScheduleDepartureTime || item.ScheduleArrivalTime || '').slice(0, 5);
+          const arr = (item.ScheduleArrivalTime || item.ScheduleDepartureTime || '').slice(0, 5);
+          return {
+            trainNo: item.TrainNo,
+            trainType: normalizeTraType(item.TrainTypeName?.Zh_tw),
+            direction,
+            bound: resolveTraBound(station, direction),
+            originStation: '',
+            destinationStation: item.EndingStationName?.Zh_tw || '',
+            departureTime: dep,
+            arrivalTime: arr,
+            durationMinutes: 0,
+            delayMinutes: delay,
+            statusText: delay > 0 ? `晚 ${delay} 分` : '準點',
+          };
+        });
+      } catch {
+        // 備援亦失敗時維持空陣列
+      }
+    }
   } else if (index) {
     const mapped: TraTrainRow[] = [];
     for (const tr of index.trains) {
