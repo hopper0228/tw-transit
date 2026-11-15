@@ -186,7 +186,12 @@ function MetroPageInner() {
       let subtitle = `${sys.name} · ${line.name}（第 ${idx + 1}/${stationsWithCoord.length} 站）`;
       if (isSelected && detail) {
         const platSummary = detail.platforms
-          .map((p) => `${p.destination}: ${formatCountdown(p.nextTrainSeconds)}`)
+          .map(
+            (p) =>
+              `${p.destination}: ${
+                p.nextTrainSeconds < 0 ? '列車調度中' : formatCountdown(p.nextTrainSeconds)
+              }`
+          )
           .join(' | ');
         subtitle = `目前查詢站點<br/>${platSummary}`;
       }
@@ -390,7 +395,7 @@ function MetroPageInner() {
                 />
               </button>
               <AutoRefreshBadge
-                intervalSeconds={15}
+                intervalSeconds={30}
                 onRefresh={handleManualRefresh}
                 isRefreshing={loading}
                 lastUpdated={detail.updatedAt}
@@ -413,7 +418,10 @@ function MetroPageInner() {
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {detail.platforms.map((plat) => {
-              const liveNext = Math.max(0, plat.nextTrainSeconds - elapsedSec);
+              const hasRealNext = plat.nextTrainSeconds >= 0;
+              const liveNext = hasRealNext
+                ? Math.max(0, plat.nextTrainSeconds - elapsedSec)
+                : -1;
               const liveFollowing =
                 plat.followingTrainSeconds > 0
                   ? Math.max(0, plat.followingTrainSeconds - elapsedSec)
@@ -440,12 +448,14 @@ function MetroPageInner() {
                     <div className="text-xs text-slate-400">下一班車</div>
                     <div
                       className={`mt-0.5 text-2xl font-extrabold tabular-nums ${
-                        liveNext <= 45
+                        hasRealNext && liveNext <= 45
                           ? 'text-red-600 animate-pulse'
-                          : 'text-slate-900 dark:text-white'
+                          : hasRealNext
+                            ? 'text-slate-900 dark:text-white'
+                            : 'text-base font-semibold text-slate-400'
                       }`}
                     >
-                      {formatCountdown(liveNext)}
+                      {hasRealNext ? formatCountdown(liveNext) : '列車調度中'}
                     </div>
                   </div>
                   <div className="text-right">

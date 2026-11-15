@@ -280,7 +280,7 @@ function BusPageInner() {
               </button>
 
               <AutoRefreshBadge
-                intervalSeconds={15}
+                intervalSeconds={30}
                 onRefresh={handleManualDetailRefresh}
                 isRefreshing={loadingDetail}
                 lastUpdated={detail?.updatedAt}

@@ -76,56 +76,160 @@ export async function getRealMetroStation(
   try {
     const raw = await fetchTdx<TdxMetroLiveBoard[]>(
       `/v2/Rail/Metro/LiveBoard/${sys.id}?%24format=JSON`,
-      15
+      25
     );
     const list = Array.isArray(raw) ? raw : [];
     if (list.length === 0) {
       return getMockMetroStation(systemId, stationId);
     }
 
-    // 1. 目前車站的月台到站資訊
-    const stationRows = list.filter(
-      (r) =>
-        r.StationID === matchedStation.id ||
-        (r.StationName?.Zh_tw && r.StationName.Zh_tw === matchedStation.name)
-    );
+    const stations = matchedLine.stations;
+    const stationIdx = stations.findIndex((s) => s.id === matchedStation.id);
 
-    const byDir = new Map<string, TdxMetroLiveBoard[]>();
-    for (const row of stationRows) {
-      const dest =
-        row.DestinationStationName?.Zh_tw || row.TripHeadSign || '列車';
-      const arr = byDir.get(dest) || [];
-      arr.push(row);
-      byDir.set(dest, arr);
-    }
-
-    const platforms: MetroPlatformArrival[] = [];
-    let platIdx = 1;
-    for (const [dest, rows] of byDir.entries()) {
-      const sorted = [...rows].sort(
-        (a, b) => (a.EstimateTime ?? 99) - (b.EstimateTime ?? 99)
+    // 1. 精準比對目前車站 (避免轉乘站混入其他路線月台)
+    let stationRows = list.filter((r) => r.StationID === matchedStation.id);
+    if (stationRows.length === 0) {
+      stationRows = list.filter(
+        (r) =>
+          r.StationName?.Zh_tw === matchedStation.name &&
+          (r.LineID === matchedLine.code || r.LineNO === matchedLine.code)
       );
-      const firstMin = sorted[0]?.EstimateTime;
-      const secondMin = sorted[1]?.EstimateTime;
-      if (firstMin === undefined) continue;
-      platforms.push({
-        platformName: `第 ${platIdx} 月台`,
-        destination: dest.startsWith('往') ? dest : `往 ${dest}`,
-        nextTrainSeconds: firstMin <= 0 ? 20 : firstMin * 60,
-        followingTrainSeconds:
-          secondMin !== undefined && secondMin >= 0 ? secondMin * 60 : 0,
-      });
-      platIdx++;
     }
 
-    // 2. 從全線各站真實 EstimateTime 推導目前線上真實行駛中的列車位置
-    const lineStationIds = new Set(matchedLine.stations.map((s) => s.id));
+    const resolveDir = (r: TdxMetroLiveBoard): 'fwd' | 'rev' | null => {
+      const destId = r.DestinationStationID;
+      const destName = r.DestinationStationName?.Zh_tw || r.TripHeadSign || '';
+      const dIdx = stations.findIndex(
+        (s) =>
+          (destId && s.id === destId) ||
+          (destName && destName.includes(s.name))
+      );
+      if (dIdx >= 0 && stationIdx >= 0) {
+        if (dIdx > stationIdx) return 'fwd';
+        if (dIdx < stationIdx) return 'rev';
+      }
+      if (destName.includes(matchedLine.terminals[1])) return 'fwd';
+      if (destName.includes(matchedLine.terminals[0])) return 'rev';
+      return null;
+    };
+
+    const fwdRows: TdxMetroLiveBoard[] = [];
+    const revRows: TdxMetroLiveBoard[] = [];
+    for (const row of stationRows) {
+      const dir = resolveDir(row);
+      if (dir === 'fwd') fwdRows.push(row);
+      else if (dir === 'rev') revRows.push(row);
+    }
+
+    const lineStationIds = new Set(stations.map((s) => s.id));
     const lineRows = list.filter(
       (r) =>
         lineStationIds.has(r.StationID) ||
         r.LineID === matchedLine.code ||
         r.LineNO === matchedLine.code
     );
+
+    // 若某方向剛好缺漏，從上游站點推算真實進站時間
+    const buildPlatform = (
+      platName: string,
+      defaultDest: string,
+      rows: TdxMetroLiveBoard[],
+      dir: 'fwd' | 'rev'
+    ): MetroPlatformArrival => {
+      const valid = rows
+        .filter((r) => typeof r.EstimateTime === 'number' && r.EstimateTime >= 0)
+        .sort((a, b) => (a.EstimateTime ?? 99) - (b.EstimateTime ?? 99));
+
+      if (valid.length > 0) {
+        const firstMin = valid[0].EstimateTime!;
+        const secondMin = valid[1]?.EstimateTime;
+        const specificDest =
+          valid[0].DestinationStationName?.Zh_tw || defaultDest;
+        return {
+          platformName: platName,
+          destination: specificDest.startsWith('往')
+            ? specificDest
+            : `往 ${specificDest}`,
+          nextTrainSeconds: firstMin <= 0 ? 20 : firstMin * 60,
+          followingTrainSeconds:
+            secondMin !== undefined && secondMin >= 0 ? secondMin * 60 : 0,
+        };
+      }
+
+      // 沿上游所有站點尋找真實行駛中且會經過本站的同向列車 (最多取最近 2 班)
+      const upstreamEstimates: { sec: number; dest: string }[] = [];
+      for (let hop = 1; hop < stations.length; hop++) {
+        const upIdx = dir === 'fwd' ? stationIdx - hop : stationIdx + hop;
+        if (upIdx < 0 || upIdx >= stations.length) break;
+        const upSt = stations[upIdx];
+        const upRow = lineRows.find((r) => {
+          if (r.StationID !== upSt.id) return false;
+          if (typeof r.EstimateTime !== 'number' || r.EstimateTime < 0) return false;
+          const destId = r.DestinationStationID;
+          const destName = r.DestinationStationName?.Zh_tw || r.TripHeadSign || '';
+          const dIdx = stations.findIndex(
+            (s) => (destId && s.id === destId) || (destName && destName.includes(s.name))
+          );
+          if (dIdx >= 0 && stationIdx >= 0) {
+            return dir === 'fwd' ? dIdx >= stationIdx : dIdx <= stationIdx;
+          }
+          return resolveDir(r) === dir;
+        });
+
+        if (upRow && upRow.EstimateTime !== undefined) {
+          const estSec = Math.max(60, (upRow.EstimateTime + hop * 2) * 60);
+          const specificDest =
+            upRow.DestinationStationName?.Zh_tw || defaultDest;
+          if (
+            upstreamEstimates.length === 0 ||
+            estSec - upstreamEstimates[upstreamEstimates.length - 1].sec >= 120
+          ) {
+            upstreamEstimates.push({ sec: estSec, dest: specificDest });
+          }
+          if (upstreamEstimates.length >= 2) break;
+        }
+      }
+
+      if (upstreamEstimates.length > 0) {
+        const first = upstreamEstimates[0];
+        const second = upstreamEstimates[1];
+        return {
+          platformName: platName,
+          destination: first.dest.startsWith('往') ? first.dest : `往 ${first.dest}`,
+          nextTrainSeconds: first.sec,
+          followingTrainSeconds: second ? second.sec : 0,
+        };
+      }
+
+      return {
+        platformName: platName,
+        destination: `往 ${defaultDest}`,
+        nextTrainSeconds: -1,
+        followingTrainSeconds: 0,
+      };
+    };
+
+    const platforms: MetroPlatformArrival[] = [];
+    const isStartTerminal = stationIdx === 0;
+    const isEndTerminal = stationIdx === stations.length - 1;
+
+    if (!isEndTerminal) {
+      platforms.push(
+        buildPlatform('第 1 月台', matchedLine.terminals[1], fwdRows, 'fwd')
+      );
+    }
+    if (!isStartTerminal) {
+      platforms.push(
+        buildPlatform(
+          isEndTerminal ? '第 1 月台' : '第 2 月台',
+          matchedLine.terminals[0],
+          revRows,
+          'rev'
+        )
+      );
+    }
+
+    // 2. 從全線各站真實 EstimateTime 推導目前線上真實行駛中的列車位置
 
     const liveVehicles: LiveRailVehicle[] = [];
     const seenKeys = new Set<string>();
@@ -290,7 +394,7 @@ export async function getRealTraData(
   try {
     const liveRes = await fetchTdx<{ TrainLiveBoards?: TdxTraTrainLive[] }>(
       '/v3/Rail/TRA/TrainLiveBoard?%24format=JSON',
-      15
+      25
     );
     const liveList = Array.isArray(liveRes?.TrainLiveBoards)
       ? liveRes.TrainLiveBoards
@@ -336,7 +440,7 @@ export async function getRealTraData(
     if (mode === 'board') {
       const boardRes = await fetchTdx<{ StationLiveBoards?: TdxTraStationBoard[] }>(
         `/v3/Rail/TRA/StationLiveBoard/Station/${encodeURIComponent(station)}?%24format=JSON`,
-        15
+        25
       );
       const rows = Array.isArray(boardRes?.StationLiveBoards)
         ? boardRes.StationLiveBoards

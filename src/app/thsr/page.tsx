@@ -230,7 +230,7 @@ function ThsrPageInner() {
           </select>
 
           <AutoRefreshBadge
-            intervalSeconds={15}
+            intervalSeconds={30}
             onRefresh={handleManualRefresh}
             isRefreshing={loading}
             lastUpdated={updatedAt}
