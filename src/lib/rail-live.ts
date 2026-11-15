@@ -610,18 +610,7 @@ async function getTraDailyIndex(dateStr: string): Promise<TraDailyIndex | null> 
             stationId: r.stationId,
             arrivalTime: r.arrivalTime,
           }));
-          const curCoord = getTraStationCoord(s.stationId);
-          const nextCoord =
-            remaining.length > 0 ? getTraStationCoord(remaining[0].stationId) : null;
-          const prevCoord =
-            idx > 0 ? getTraStationCoord(mappedStops[idx - 1].stationId) : null;
-
-          let bound: 'north' | 'south' = direction === 0 ? 'north' : 'south';
-          if (curCoord && nextCoord) {
-            bound = nextCoord[0] >= curCoord[0] ? 'north' : 'south';
-          } else if (curCoord && prevCoord) {
-            bound = curCoord[0] >= prevCoord[0] ? 'north' : 'south';
-          }
+          const bound = resolveTraBound(s.stationId, direction);
 
           let arrList = byStation.get(s.stationId);
           if (!arrList) {
@@ -663,6 +652,16 @@ async function getTraDailyIndex(dateStr: string): Promise<TraDailyIndex | null> 
   return traDailyInFlight;
 }
 
+function resolveTraBound(stationId: string, direction: 0 | 1): 'north' | 'south' {
+  // 東部幹線 / 宜蘭線 / 北迴線 (6xxx, 7xxx)：逆行(1)為北上往臺北，順行(0)為南下往花東
+  const isEast = stationId.startsWith('6') || stationId.startsWith('7');
+  if (isEast) {
+    return direction === 1 ? 'north' : 'south';
+  }
+  // 西部幹線 / 南迴線 (09xx-5xxx)：順行(0)為北上往基隆，逆行(1)為南下往高屏
+  return direction === 0 ? 'north' : 'south';
+}
+
 function normalizeTraType(raw?: string): TraTrainRow['trainType'] {
   if (!raw) return '區間';
   if (raw.includes('3000') || raw.includes('新自強')) return '新自強';
@@ -698,13 +697,9 @@ export async function getRealTraData(
     };
   }
 
-  const [liveRes, boardRes, dailyIndex] = await Promise.allSettled([
+  const [liveRes, dailyIndex] = await Promise.allSettled([
     fetchTdx<{ UpdateTime?: string; SrcUpdateTime?: string; TrainLiveBoards?: TdxTraTrainLive[] }>(
       '/v3/Rail/TRA/TrainLiveBoard?%24format=JSON',
-      15
-    ),
-    fetchTdx<{ UpdateTime?: string; SrcUpdateTime?: string; StationLiveBoards?: TdxTraStationBoard[] }>(
-      '/v3/Rail/TRA/StationLiveBoard?%24format=JSON',
       15
     ),
     getTraDailyIndex(dateStr),
@@ -713,10 +708,6 @@ export async function getRealTraData(
   const liveList =
     liveRes.status === 'fulfilled' && Array.isArray(liveRes.value?.TrainLiveBoards)
       ? liveRes.value.TrainLiveBoards
-      : [];
-  const stationBoardAll =
-    boardRes.status === 'fulfilled' && Array.isArray(boardRes.value?.StationLiveBoards)
-      ? boardRes.value.StationLiveBoards
       : [];
   const index = dailyIndex.status === 'fulfilled' ? dailyIndex.value : null;
 
@@ -755,12 +746,6 @@ export async function getRealTraData(
     });
   }
 
-  for (const sb of stationBoardAll) {
-    if (sb.DelayTime !== undefined && !delayMap.has(sb.TrainNo)) {
-      delayMap.set(sb.TrainNo, sb.DelayTime);
-    }
-  }
-
   let trains: TraTrainRow[] = [];
 
   if (mode === 'board') {
@@ -789,26 +774,6 @@ export async function getRealTraData(
     };
 
     trains = [...pickBound('north'), ...pickBound('south')];
-
-    if (trains.length === 0) {
-      trains = stationBoardAll
-        .filter((r) => !r.StationID || r.StationID === station)
-        .map((r) => {
-          const delay = r.DelayTime ?? delayMap.get(r.TrainNo) ?? 0;
-          return {
-            trainNo: r.TrainNo,
-            trainType: normalizeTraType(r.TrainTypeName?.Zh_tw),
-            direction: (r.Direction === 1 ? 1 : 0) as 0 | 1,
-            originStation: '',
-            destinationStation: r.EndingStationName?.Zh_tw || '終點站',
-            departureTime: (r.ScheduleDepartureTime || r.ScheduleArrivalTime || '--:--').slice(0, 5),
-            arrivalTime: (r.ScheduleArrivalTime || '--:--').slice(0, 5),
-            durationMinutes: 0,
-            delayMinutes: delay,
-            statusText: delay > 0 ? `晚 ${delay} 分` : '準點',
-          };
-        });
-    }
   } else if (index) {
     const mapped: TraTrainRow[] = [];
     for (const tr of index.trains) {
