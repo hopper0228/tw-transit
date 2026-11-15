@@ -697,12 +697,17 @@ export async function getRealTraData(
     };
   }
 
-  const [liveRes, dailyIndex] = await Promise.allSettled([
+  // 冷啟動時先取得當日全線時刻表索引，避免與 TrainLiveBoard 併發觸發 TDX 429
+  const dailyIndexValue = await getTraDailyIndex(dateStr);
+  const dailyIndex: PromiseSettledResult<Awaited<ReturnType<typeof getTraDailyIndex>>> = {
+    status: 'fulfilled',
+    value: dailyIndexValue,
+  };
+  const [liveRes] = await Promise.allSettled([
     fetchTdx<{ UpdateTime?: string; SrcUpdateTime?: string; TrainLiveBoards?: TdxTraTrainLive[] }>(
       '/v3/Rail/TRA/TrainLiveBoard?%24format=JSON',
       15
     ),
-    getTraDailyIndex(dateStr),
   ]);
 
   const liveList =
