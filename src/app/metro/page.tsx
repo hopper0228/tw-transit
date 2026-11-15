@@ -2,12 +2,17 @@
 
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { List, Map as MapIcon, Search, Star, TramFront } from 'lucide-react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { List, Map as MapIcon, MapPin, Search, Star, TramFront } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
 import type { MapMarker } from '@/components/LeafletMap';
+import { useUserLocation } from '@/lib/location';
 import { METRO_SYSTEMS } from '@/lib/mock-data';
-import { getMetroStationCoord, interpolateAlongPath } from '@/lib/rail-geo';
+import {
+  findNearestMetroStation,
+  getMetroStationCoord,
+  interpolateAlongPath,
+} from '@/lib/rail-geo';
 import { MetroStationDetail } from '@/lib/types';
 import { isFavorite, toggleFavorite } from '@/lib/favorites';
 
@@ -57,6 +62,25 @@ function MetroPageInner() {
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [animTick, setAnimTick] = useState(() => Math.floor(Date.now() / 1000));
 
+  const { coords, ready } = useUserLocation();
+  const hasAutoSelectedRef = useRef(Boolean(searchParams.get('station')));
+  const [autoMatchedLabel, setAutoMatchedLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!ready || !coords || hasAutoSelectedRef.current) return;
+    hasAutoSelectedRef.current = true;
+    const nearest = findNearestMetroStation(coords.lat, coords.lng, METRO_SYSTEMS);
+    if (nearest) {
+      const t = setTimeout(() => {
+        setSystemId(nearest.systemId);
+        setSelectedLineCode(nearest.lineCode);
+        setStationId(nearest.stationId);
+        setAutoMatchedLabel(`${nearest.stationId} ${nearest.stationName}站`);
+      }, 0);
+      return () => clearTimeout(t);
+    }
+  }, [ready, coords]);
+
   useEffect(() => {
     if (viewMode !== 'map') return;
     const timer = setInterval(() => {
@@ -81,11 +105,12 @@ function MetroPageInner() {
   }, []);
 
   useEffect(() => {
+    if (!ready) return;
     const t = setTimeout(() => {
       void loadStation(systemId, stationId);
     }, 0);
     return () => clearTimeout(t);
-  }, [systemId, stationId, loadStation]);
+  }, [ready, systemId, stationId, loadStation]);
 
   const handleManualRefresh = useCallback(() => {
     setLoading(true);
@@ -93,6 +118,8 @@ function MetroPageInner() {
   }, [systemId, stationId, loadStation]);
 
   const handleSystemChange = (newSysId: string) => {
+    hasAutoSelectedRef.current = true;
+    setAutoMatchedLabel(null);
     setSystemId(newSysId);
     const sys = METRO_SYSTEMS.find((s) => s.id === newSysId) || METRO_SYSTEMS[0];
     setSelectedLineCode(sys.lines[0].code);
@@ -101,6 +128,8 @@ function MetroPageInner() {
   };
 
   const handleLineChange = (code: string) => {
+    hasAutoSelectedRef.current = true;
+    setAutoMatchedLabel(null);
     setSelectedLineCode(code);
     const line = currentSys.lines.find((l) => l.code === code);
     if (line && line.stations[0]) {
@@ -224,8 +253,14 @@ function MetroPageInner() {
             <TramFront className="h-6 w-6 text-teal-600" />
             捷運 / 輕軌即時查詢
           </h1>
-          <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-            涵蓋北捷、新北捷（環狀/輕軌）、機捷、中捷、高捷與高雄輕軌全部站點
+          <p className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <span>涵蓋北捷、新北捷（環狀/輕軌）、機捷、中捷、高捷與高雄輕軌全部站點</span>
+            {autoMatchedLabel && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2.5 py-0.5 text-xs font-semibold text-teal-700 dark:bg-teal-950/60 dark:text-teal-300">
+                <MapPin className="h-3 w-3" />
+                已依定位預設最近：{autoMatchedLabel}
+              </span>
+            )}
           </p>
         </div>
 

@@ -1,4 +1,5 @@
 import railCoordsData from './rail-coords.json';
+import type { MetroSystemItem, RailStationItem } from './rail-directory';
 
 type CoordMap = Record<string, [number, number]>;
 
@@ -7,6 +8,80 @@ const railCoords = railCoordsData as unknown as {
   tra: CoordMap;
   thsr: CoordMap;
 };
+
+function approxDistSq(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const dLat = lat1 - lat2;
+  const dLng = (lng1 - lng2) * 0.9;
+  return dLat * dLat + dLng * dLng;
+}
+
+export function findNearestMetroStation(
+  lat: number,
+  lng: number,
+  systems: MetroSystemItem[]
+): {
+  systemId: MetroSystemItem['id'];
+  lineCode: string;
+  stationId: string;
+  stationName: string;
+} | null {
+  let best: {
+    systemId: MetroSystemItem['id'];
+    lineCode: string;
+    stationId: string;
+    stationName: string;
+    sq: number;
+  } | null = null;
+
+  for (const sys of systems) {
+    for (const line of sys.lines) {
+      for (const st of line.stations) {
+        const coord = railCoords.metro[`${sys.id}:${st.id}`];
+        if (!coord) continue;
+        const sq = approxDistSq(lat, lng, coord[0], coord[1]);
+        if (!best || sq < best.sq) {
+          best = {
+            systemId: sys.id,
+            lineCode: line.code,
+            stationId: st.id,
+            stationName: st.name,
+            sq,
+          };
+        }
+      }
+    }
+  }
+
+  return best
+    ? {
+        systemId: best.systemId,
+        lineCode: best.lineCode,
+        stationId: best.stationId,
+        stationName: best.stationName,
+      }
+    : null;
+}
+
+export function findNearestRailStation(
+  lat: number,
+  lng: number,
+  stations: RailStationItem[],
+  kind: 'tra' | 'thsr'
+): { id: string; name: string } | null {
+  const map = railCoords[kind];
+  let best: { id: string; name: string; sq: number } | null = null;
+
+  for (const st of stations) {
+    const coord = map[st.id];
+    if (!coord) continue;
+    const sq = approxDistSq(lat, lng, coord[0], coord[1]);
+    if (!best || sq < best.sq) {
+      best = { id: st.id, name: st.name, sq };
+    }
+  }
+
+  return best ? { id: best.id, name: best.name } : null;
+}
 
 export function getMetroStationCoord(
   systemId: string,

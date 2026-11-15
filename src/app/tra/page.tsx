@@ -2,12 +2,17 @@
 
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeftRight, List, Map as MapIcon, TrainFront } from 'lucide-react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeftRight, List, Map as MapIcon, MapPin, TrainFront } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
 import type { MapMarker } from '@/components/LeafletMap';
+import { useUserLocation } from '@/lib/location';
 import { TRA_STATIONS } from '@/lib/mock-data';
-import { getTraStationCoord, interpolateAlongPath } from '@/lib/rail-geo';
+import {
+  findNearestRailStation,
+  getTraStationCoord,
+  interpolateAlongPath,
+} from '@/lib/rail-geo';
 import { TraTrainRow } from '@/lib/types';
 
 const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
@@ -47,6 +52,24 @@ function TraPageInner() {
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [animTick, setAnimTick] = useState(() => Math.floor(Date.now() / 1000));
+  const { coords, ready } = useUserLocation();
+  const hasAutoSelectedRef = useRef(Boolean(searchParams.get('station')));
+  const [autoMatchedLabel, setAutoMatchedLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!ready || !coords || hasAutoSelectedRef.current) return;
+    hasAutoSelectedRef.current = true;
+    const nearest = findNearestRailStation(coords.lat, coords.lng, TRA_STATIONS, 'tra');
+    if (nearest) {
+      const t = setTimeout(() => {
+        setStation(nearest.id);
+        setFrom(nearest.id);
+        setTo(nearest.id === '3300' ? '1000' : '3300');
+        setAutoMatchedLabel(`${nearest.name}站`);
+      }, 0);
+      return () => clearTimeout(t);
+    }
+  }, [ready, coords]);
 
   useEffect(() => {
     if (viewMode !== 'map') return;
@@ -74,11 +97,12 @@ function TraPageInner() {
   }, [mode, station, from, to]);
 
   useEffect(() => {
+    if (!ready) return;
     const t = setTimeout(() => {
       void loadTra();
     }, 0);
     return () => clearTimeout(t);
-  }, [loadTra]);
+  }, [ready, loadTra]);
 
   const handleManualRefresh = useCallback(() => {
     setLoading(true);
@@ -170,8 +194,14 @@ function TraPageInner() {
             <TrainFront className="h-6 w-6 text-indigo-600" />
             台鐵火車即時查詢
           </h1>
-          <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-            車站即時電子看板與起訖點列車準點/誤點動態
+          <p className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <span>車站即時電子看板與起訖點列車準點/誤點動態</span>
+            {autoMatchedLabel && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                <MapPin className="h-3 w-3" />
+                已依定位預設最近：{autoMatchedLabel}
+              </span>
+            )}
           </p>
         </div>
 
