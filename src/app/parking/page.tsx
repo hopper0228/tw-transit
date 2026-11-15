@@ -12,6 +12,8 @@ import {
   Search,
 } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
+import LocationBanner from '@/components/LocationBanner';
+import { formatDistance, useUserLocation } from '@/lib/location';
 import { ParkingLot } from '@/lib/types';
 import type { MapBounds, MapMarker } from '@/components/LeafletMap';
 
@@ -34,6 +36,7 @@ const CITIES = [
 
 function ParkingPageInner() {
   const searchParams = useSearchParams();
+  const { coords, status: locStatus, refreshLocation } = useUserLocation();
   const [city, setCity] = useState(searchParams.get('city') || 'All');
   const [query, setQuery] = useState(searchParams.get('q') || '');
   const [onlyAvailable, setOnlyAvailable] = useState(false);
@@ -51,6 +54,10 @@ function ParkingPageInner() {
         q: query,
         onlyAvailable: String(onlyAvailable),
       });
+      if (coords) {
+        qs.set('lat', String(coords.lat));
+        qs.set('lng', String(coords.lng));
+      }
       if (viewMode === 'map' && mapBounds) {
         qs.set('north', String(mapBounds.north));
         qs.set('south', String(mapBounds.south));
@@ -67,7 +74,7 @@ function ParkingPageInner() {
     } finally {
       setLoading(false);
     }
-  }, [city, query, onlyAvailable, viewMode, mapBounds]);
+  }, [city, query, onlyAvailable, coords, viewMode, mapBounds]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -144,6 +151,12 @@ function ParkingPageInner() {
         </div>
       </div>
 
+      <LocationBanner
+        coords={coords}
+        status={locStatus}
+        onRefresh={refreshLocation}
+      />
+
       {/* 篩選列 */}
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -214,6 +227,11 @@ function ParkingPageInner() {
                     <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                       {lot.parkingType}
                     </span>
+                    {lot.distanceMeters !== undefined && (
+                      <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-bold text-violet-700 tabular-nums dark:bg-violet-950/60 dark:text-violet-300">
+                        {formatDistance(lot.distanceMeters)}
+                      </span>
+                    )}
                     <h3 className="truncate text-base font-bold text-slate-900 dark:text-white">
                       {lot.name}
                     </h3>

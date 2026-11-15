@@ -29,6 +29,7 @@ export interface BusRouteInfo {
   departureStop: string;
   destinationStop: string;
   operatorName: string;
+  distanceMeters?: number;
 }
 
 export interface BusRouteDetail {
@@ -117,6 +118,7 @@ export interface YouBikeStation {
   availableReturnDocks: number;
   serviceStatus: 0 | 1 | 2; // 1=正常營運
   updatedAt: string;
+  distanceMeters?: number;
 }
 
 export interface ParkingLot {
@@ -131,6 +133,7 @@ export interface ParkingLot {
   fareDescription: string;
   parkingType: '立體' | '平面' | '地下';
   updatedAt: string;
+  distanceMeters?: number;
 }
 
 export interface FavoriteItem {

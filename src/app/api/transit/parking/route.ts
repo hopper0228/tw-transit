@@ -1,6 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { MOCK_PARKING_LOTS } from '@/lib/mock-data';
-import { GeoBounds, getRealTaipeiParkingLots } from '@/lib/opendata-client';
+import {
+  GeoBounds,
+  GeoPoint,
+  getRealTaipeiParkingLots,
+} from '@/lib/opendata-client';
+
+function parseUserPoint(params: URLSearchParams): GeoPoint | undefined {
+  const lat = Number(params.get('lat'));
+  const lng = Number(params.get('lng'));
+  if (
+    params.has('lat') &&
+    params.has('lng') &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng)
+  ) {
+    return { lat, lng };
+  }
+  return undefined;
+}
 
 function parseBounds(params: URLSearchParams): GeoBounds | undefined {
   const north = Number(params.get('north'));
@@ -29,10 +47,16 @@ export async function GET(req: NextRequest) {
   const q = (params.get('q') || '').trim().toLowerCase();
   const onlyAvailable = params.get('onlyAvailable') === 'true';
   const bounds = parseBounds(params);
+  const userPoint = parseUserPoint(params);
 
   if (city === 'All' || city === 'Taipei') {
     try {
-      const realLots = await getRealTaipeiParkingLots(q, onlyAvailable, bounds);
+      const realLots = await getRealTaipeiParkingLots(
+        q,
+        onlyAvailable,
+        bounds,
+        userPoint
+      );
       if (realLots.length > 0 || q || bounds) {
         return NextResponse.json({
           lots: realLots.slice(0, 100),

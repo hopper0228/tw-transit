@@ -1,20 +1,51 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMockBusRouteDetail, MOCK_BUS_ROUTES } from '@/lib/mock-data';
 import {
+  GeoPoint,
   getTaipeiBusRouteDetail,
   getTaipeiBusRoutes,
 } from '@/lib/opendata-client';
 import { fetchTdx, isTdxConfigured } from '@/lib/tdx-client';
 import { BusRouteDetail, BusStopStatus } from '@/lib/types';
 
+function parseUserPoint(params: URLSearchParams): GeoPoint | undefined {
+  const lat = Number(params.get('lat'));
+  const lng = Number(params.get('lng'));
+  if (
+    params.has('lat') &&
+    params.has('lng') &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng)
+  ) {
+    return { lat, lng };
+  }
+  return undefined;
+}
+
 export async function GET(req: NextRequest) {
-  const city = req.nextUrl.searchParams.get('city') || 'Taipei';
-  const routeName = req.nextUrl.searchParams.get('route');
-  const direction = (Number(req.nextUrl.searchParams.get('dir')) === 1 ? 1 : 0) as 0 | 1;
-  const q = (req.nextUrl.searchParams.get('q') || '').trim().toLowerCase();
+  const params = req.nextUrl.searchParams;
+  const city = params.get('city') || 'Taipei';
+  const routeName = params.get('route');
+  const direction = (Number(params.get('dir')) === 1 ? 1 : 0) as 0 | 1;
+  const q = (params.get('q') || '').trim().toLowerCase();
+  const userPoint = parseUserPoint(params);
 
   // 1. 若無指定 route：回傳路線列表供搜尋
   if (!routeName) {
+    // 雙北公車若需依裝置距離排序，使用已建立站牌座標索引的 OpenData 計算精準距離
+    if ((city === 'Taipei' || city === 'All') && userPoint) {
+      try {
+        const realRoutes = await getTaipeiBusRoutes(q, userPoint);
+        return NextResponse.json({
+          routes: realRoutes.slice(0, 60),
+          total: realRoutes.length,
+          source: isTdxConfigured() ? 'tdx' : 'opendata',
+        });
+      } catch {
+        // fallback below
+      }
+    }
+
     // 優先使用 TDX (若已設定金鑰)
     if (isTdxConfigured() && city !== 'InterCity') {
       try {
@@ -46,10 +77,10 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 雙北公車使用免帳號真實台北市 OpenData (801+ 條路線)
+    // 雙北公車使用免帳號真實台北市 OpenData (801+ 條路線，依裝置距離排序)
     if (city === 'Taipei' || city === 'All') {
       try {
-        const realRoutes = await getTaipeiBusRoutes(q);
+        const realRoutes = await getTaipeiBusRoutes(q, userPoint);
         return NextResponse.json({
           routes: realRoutes.slice(0, 60),
           total: realRoutes.length,

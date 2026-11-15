@@ -15,6 +15,8 @@ import {
   Zap,
 } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
+import LocationBanner from '@/components/LocationBanner';
+import { formatDistance, useUserLocation } from '@/lib/location';
 import { BUS_CITIES } from '@/lib/mock-data';
 import { BusRouteDetail, BusRouteInfo, BusStopStatus } from '@/lib/types';
 import { isFavorite, toggleFavorite } from '@/lib/favorites';
@@ -70,6 +72,7 @@ function BusPageInner() {
   const initialCity = searchParams.get('city') || 'Taipei';
   const initialRoute = searchParams.get('route');
 
+  const { coords, status: locStatus, refreshLocation } = useUserLocation();
   const [city, setCity] = useState(initialCity);
   const [query, setQuery] = useState('');
   const [showKeypad, setShowKeypad] = useState(false);
@@ -84,12 +87,17 @@ function BusPageInner() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [faved, setFaved] = useState(false);
 
-  // 取得路線清單
+  // 取得路線清單 (帶入裝置座標由近到遠排序)
   useEffect(() => {
     let active = true;
     const t = setTimeout(() => {
       if (active) setLoadingList(true);
-      fetch(`/api/transit/bus?city=${encodeURIComponent(city)}&q=${encodeURIComponent(query)}`)
+      const qs = new URLSearchParams({ city, q: query });
+      if (coords) {
+        qs.set('lat', String(coords.lat));
+        qs.set('lng', String(coords.lng));
+      }
+      fetch(`/api/transit/bus?${qs.toString()}`)
         .then((res) => res.json())
         .then((data) => {
           if (active) setRoutes(data.routes || []);
@@ -105,7 +113,7 @@ function BusPageInner() {
       active = false;
       clearTimeout(t);
     };
-  }, [city, query]);
+  }, [city, query, coords]);
 
   const loadDetail = useCallback(
     async (routeName: string, dir: 0 | 1) => {
@@ -422,6 +430,14 @@ function BusPageInner() {
         </div>
       </div>
 
+      {/* 裝置位置排序狀態列 */}
+      <LocationBanner
+        coords={coords}
+        status={locStatus}
+        onRefresh={refreshLocation}
+        label="已依距離您最近站牌由近到遠排序路線"
+      />
+
       {/* 縣市選擇膠囊 */}
       <div className="flex flex-wrap gap-2">
         {BUS_CITIES.map((c) => (
@@ -519,9 +535,16 @@ function BusPageInner() {
                       </div>
                     </div>
                   </div>
-                  <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
-                    看動態 →
-                  </span>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {r.distanceMeters !== undefined && (
+                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 tabular-nums dark:bg-emerald-950/60 dark:text-emerald-300">
+                        最近站 {formatDistance(r.distanceMeters)}
+                      </span>
+                    )}
+                    <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
+                      看動態 →
+                    </span>
+                  </div>
                 </button>
               </li>
             ))}

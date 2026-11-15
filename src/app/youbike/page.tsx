@@ -5,8 +5,10 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useState } from 'react';
 import { Bike, List, Map as MapIcon, MapPin, Search } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
+import LocationBanner from '@/components/LocationBanner';
+import { formatDistance, useUserLocation } from '@/lib/location';
 import { YouBikeStation } from '@/lib/types';
-import type { MapMarker } from '@/components/LeafletMap';
+import type { MapBounds, MapMarker } from '@/components/LeafletMap';
 
 const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
   ssr: false,
@@ -27,29 +29,41 @@ const CITIES = [
 
 function YouBikePageInner() {
   const searchParams = useSearchParams();
+  const { coords, status: locStatus, refreshLocation } = useUserLocation();
+
   const [city, setCity] = useState(searchParams.get('city') || 'All');
   const [query, setQuery] = useState(searchParams.get('q') || '');
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [stations, setStations] = useState<YouBikeStation[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
 
   const loadStations = useCallback(async () => {
     try {
-      const res = await fetch(
-        `/api/transit/youbike?city=${encodeURIComponent(city)}&q=${encodeURIComponent(
-          query
-        )}`
-      );
+      const qs = new URLSearchParams({ city, q: query });
+      if (coords) {
+        qs.set('lat', String(coords.lat));
+        qs.set('lng', String(coords.lng));
+      }
+      if (viewMode === 'map' && mapBounds) {
+        qs.set('north', String(mapBounds.north));
+        qs.set('south', String(mapBounds.south));
+        qs.set('east', String(mapBounds.east));
+        qs.set('west', String(mapBounds.west));
+      }
+      const res = await fetch(`/api/transit/youbike?${qs.toString()}`);
       const data = await res.json();
       setStations(data.stations || []);
+      setTotalCount(data.total ?? (data.stations || []).length);
       setUpdatedAt(data.updatedAt || '');
     } catch {
       // ignore
     } finally {
       setLoading(false);
     }
-  }, [city, query]);
+  }, [city, query, coords, viewMode, mapBounds]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -85,7 +99,7 @@ function YouBikePageInner() {
             YouBike 即時查詢
           </h1>
           <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-            即時區分 2.0 一般車、2.0E 電輔車與可還空位
+            依裝置目前位置由近到遠排序，即時區分可借與可還空位
           </p>
         </div>
 
@@ -123,6 +137,12 @@ function YouBikePageInner() {
         </div>
       </div>
 
+      <LocationBanner
+        coords={coords}
+        status={locStatus}
+        onRefresh={refreshLocation}
+      />
+
       {/* 篩選列 */}
       <div className="space-y-3">
         <div className="flex flex-wrap gap-2">
@@ -154,7 +174,16 @@ function YouBikePageInner() {
       </div>
 
       {viewMode === 'map' ? (
-        <LeafletMap markers={markers} heightClass="h-[500px]" />
+        <div className="space-y-2.5">
+          <LeafletMap
+            markers={markers}
+            heightClass="h-[500px]"
+            onBoundsChange={(b) => setMapBounds(b)}
+          />
+          <p className="text-center text-xs text-slate-500">
+            移動或縮放地圖即自動更新該範圍站點 · 目前顯示 {stations.length} 站（共符合 {totalCount} 站）
+          </p>
+        </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {stations.map((st) => {
@@ -165,9 +194,16 @@ function YouBikePageInner() {
                 className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900"
               >
                 <div>
-                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                    {st.stationName}
-                  </h3>
+                  <div className="flex items-start justify-between gap-2">
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                      {st.stationName}
+                    </h3>
+                    {st.distanceMeters !== undefined && (
+                      <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700 tabular-nums dark:bg-amber-950/60 dark:text-amber-300">
+                        {formatDistance(st.distanceMeters)}
+                      </span>
+                    )}
+                  </div>
                   <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">
                     <MapPin className="h-3.5 w-3.5 shrink-0" />
                     {st.address} · 更新於 {st.updatedAt}

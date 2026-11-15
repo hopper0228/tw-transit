@@ -257,17 +257,70 @@ function getIndexedVehicles() {
   );
 }
 
-export async function getTaipeiBusRoutes(query?: string): Promise<BusRouteInfo[]> {
+export interface GeoBounds {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+}
+
+export interface GeoPoint {
+  lat: number;
+  lng: number;
+}
+
+function calcDistanceMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number
+): number {
+  const R = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+
+export async function getTaipeiBusRoutes(
+  query?: string,
+  userPoint?: GeoPoint
+): Promise<BusRouteInfo[]> {
   const routes = await getCompactRoutes();
   const q = (query || '').trim().toLowerCase();
-  if (!q) return routes;
+  let filtered = q
+    ? routes.filter(
+        (r) =>
+          r.routeName.toLowerCase().includes(q) ||
+          r.departureStop.toLowerCase().includes(q) ||
+          r.destinationStop.toLowerCase().includes(q)
+      )
+    : routes;
 
-  return routes.filter(
-    (r) =>
-      r.routeName.toLowerCase().includes(q) ||
-      r.departureStop.toLowerCase().includes(q) ||
-      r.destinationStop.toLowerCase().includes(q)
-  );
+  if (userPoint) {
+    const stopsMap = await getIndexedStops();
+    filtered = filtered
+      .map((r) => {
+        const bucket = stopsMap.get(Number(r.routeUid));
+        if (!bucket) return r;
+        let minDist = Infinity;
+        for (const s of bucket.dir0) {
+          const d = calcDistanceMeters(userPoint.lat, userPoint.lng, s.lat, s.lng);
+          if (d < minDist) minDist = d;
+        }
+        return Number.isFinite(minDist)
+          ? { ...r, distanceMeters: minDist }
+          : r;
+      })
+      .sort(
+        (a, b) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity)
+      );
+  }
+
+  return filtered;
 }
 
 export async function getTaipeiBusRouteDetail(
@@ -409,7 +462,9 @@ interface NewTaipeiYouBikeRaw {
 
 export async function getRealYouBikeStations(
   city: string,
-  query?: string
+  query?: string,
+  bounds?: GeoBounds,
+  userPoint?: GeoPoint
 ): Promise<YouBikeStation[]> {
   const results: YouBikeStation[] = [];
 
@@ -469,13 +524,52 @@ export async function getRealYouBikeStations(
   }
 
   const q = (query || '').trim().toLowerCase();
-  if (!q) return results;
+  let filtered = results.filter((s) => {
+    if (
+      q &&
+      !s.stationName.toLowerCase().includes(q) &&
+      !s.address.toLowerCase().includes(q)
+    ) {
+      return false;
+    }
+    if (
+      bounds &&
+      (s.lat < bounds.south ||
+        s.lat > bounds.north ||
+        s.lng < bounds.west ||
+        s.lng > bounds.east)
+    ) {
+      return false;
+    }
+    return true;
+  });
 
-  return results.filter(
-    (s) =>
-      s.stationName.toLowerCase().includes(q) ||
-      s.address.toLowerCase().includes(q)
-  );
+  if (userPoint) {
+    filtered = filtered
+      .map((s) => ({
+        ...s,
+        distanceMeters: calcDistanceMeters(
+          userPoint.lat,
+          userPoint.lng,
+          s.lat,
+          s.lng
+        ),
+      }))
+      .sort(
+        (a, b) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity)
+      );
+  } else if (bounds) {
+    const centerLat = (bounds.north + bounds.south) / 2;
+    const centerLng = (bounds.east + bounds.west) / 2;
+    filtered.sort(
+      (a, b) =>
+        (a.lat - centerLat) ** 2 +
+        (a.lng - centerLng) ** 2 -
+        ((b.lat - centerLat) ** 2 + (b.lng - centerLng) ** 2)
+    );
+  }
+
+  return filtered;
 }
 
 // ==========================================
@@ -510,17 +604,11 @@ interface CompactParkingMeta {
   parkingType: '立體' | '平面';
 }
 
-export interface GeoBounds {
-  north: number;
-  south: number;
-  east: number;
-  west: number;
-}
-
 export async function getRealTaipeiParkingLots(
   query?: string,
   onlyAvailable = false,
-  bounds?: GeoBounds
+  bounds?: GeoBounds,
+  userPoint?: GeoPoint
 ): Promise<ParkingLot[]> {
   const [metas, availMap] = await Promise.all([
     fetchAndTransform<{ data: { park: TcmsvParkDesc[] } }, CompactParkingMeta[]>(
@@ -601,11 +689,18 @@ export async function getRealTaipeiParkingLots(
       fareDescription: p.fareDescription,
       parkingType: p.parkingType,
       updatedAt: '即時',
+      distanceMeters: userPoint
+        ? calcDistanceMeters(userPoint.lat, userPoint.lng, p.lat, p.lng)
+        : undefined,
     });
   }
 
-  // 若有地圖範圍，依距離地圖中心點由近到遠排序
-  if (bounds) {
+  // 優先依裝置位置由近到遠排序；若無裝置位置但有地圖範圍，則依地圖中心排序
+  if (userPoint) {
+    lots.sort(
+      (a, b) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity)
+    );
+  } else if (bounds) {
     const centerLat = (bounds.north + bounds.south) / 2;
     const centerLng = (bounds.east + bounds.west) / 2;
     lots.sort(
