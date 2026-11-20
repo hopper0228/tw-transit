@@ -1190,10 +1190,11 @@ export async function getRealThsrData(
   }
 
   try {
-    // 冷啟動時先取得並快取當日高鐵時刻表（3600s），避免與餘位 API 併發觸發 TDX 429
+    // 冷啟動時先取得並快取當日高鐵時刻表（3600s + Vercel Data Cache 跨實例共享），避免與餘位 API 併發觸發 TDX 429
     const daily = await fetchTdx<TdxThsrDaily[]>(
       '/v2/Rail/THSR/DailyTimetable/Today?%24format=JSON',
-      3600
+      3600,
+      true
     );
     const seatData = await fetchTdx<TdxThsrSeatList>(
       `/v2/Rail/THSR/AvailableSeatStatusList/${encodeURIComponent(from)}?%24format=JSON`,

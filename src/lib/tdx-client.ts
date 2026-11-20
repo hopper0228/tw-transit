@@ -125,7 +125,11 @@ async function getAccessToken(): Promise<string> {
 /**
  * 呼叫 TDX API 並於伺服器端快取指定秒數 (含排隊限流、併發去重與 429 備援)
  */
-export async function fetchTdx<T>(path: string, ttlSeconds = 15): Promise<T> {
+export async function fetchTdx<T>(
+  path: string,
+  ttlSeconds = 15,
+  useDataCache = false
+): Promise<T> {
   const now = Date.now();
   const cached = responseCache.get(path);
   if (cached && cached.expiresAt > now) {
@@ -148,7 +152,9 @@ export async function fetchTdx<T>(path: string, ttlSeconds = 15): Promise<T> {
             Authorization: `Bearer ${token}`,
             Accept: 'application/json',
           },
-          cache: 'no-store',
+          ...(useDataCache
+            ? { next: { revalidate: ttlSeconds } }
+            : { cache: 'no-store' as const }),
         });
       });
 
