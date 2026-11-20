@@ -236,7 +236,7 @@ function TraPageInner() {
       </div>
 
       {/* 條件選擇面板：出發站 + 選填目標站 (前端即時篩選) */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+      <div className="transit-card p-4">
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2.5">
@@ -347,7 +347,7 @@ function TraPageInner() {
             return (
               <div
                 key={col.bound}
-                className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-900"
+                className="transit-card overflow-hidden"
               >
                 <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-2.5 text-xs font-bold text-slate-700 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-200">
                   <span>{col.title}</span>

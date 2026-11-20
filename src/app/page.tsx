@@ -121,29 +121,36 @@ export default function HomePage() {
   return (
     <div className="space-y-8">
       {/* Hero & 全域智慧搜尋 */}
-      <section className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/70 sm:p-8">
-        <div className="mx-auto max-w-2xl text-center">
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white sm:text-3xl">
-            想去哪裡？一秒查詢全台即時交通
+      <section className="transit-card relative overflow-hidden p-6 sm:p-10">
+        <div className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-blue-500/10 blur-3xl dark:bg-blue-500/15" />
+        <div className="pointer-events-none absolute -bottom-24 -left-24 h-64 w-64 rounded-full bg-teal-500/10 blur-3xl dark:bg-teal-500/15" />
+
+        <div className="relative mx-auto max-w-2xl text-center">
+          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-blue-200/80 bg-blue-50/80 px-3 py-1 text-xs font-semibold text-blue-700 dark:border-blue-800/60 dark:bg-blue-950/60 dark:text-blue-300">
+            <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+            六大運具即時整合 · 30 秒自動背景同步
+          </div>
+          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white sm:text-4xl">
+            想去哪裡？一秒掌握全台即時交通
           </h1>
-          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-            選擇下方運具，或直接搜尋公車路線、車站、YouBike 與停車場
+          <p className="mt-2.5 text-sm text-slate-500 dark:text-slate-400">
+            公車、捷運、台鐵、高鐵、YouBike 與停車場統一即時看板
           </p>
 
           {/* 搜尋框 */}
-          <div className="relative mt-5">
+          <div className="relative mt-6">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="搜尋路線或站名，例如：307、台北車站、市政府、板橋..."
-              className="w-full rounded-xl border border-slate-300 bg-slate-50 py-3.5 pl-11 pr-10 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:focus:border-blue-400"
+              className="w-full rounded-2xl border border-slate-200 bg-white py-3.5 pl-12 pr-10 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 dark:border-slate-700 dark:bg-slate-950/90 dark:text-white dark:focus:border-blue-400"
             />
             {query && (
               <button
                 onClick={() => setQuery('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600 dark:hover:bg-slate-800"
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
                 aria-label="清除搜尋"
               >
                 <X className="h-4 w-4" />
@@ -152,7 +159,7 @@ export default function HomePage() {
 
             {/* 即時搜尋下拉建議 */}
             {query.trim() && (
-              <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-lg dark:border-slate-700 dark:bg-slate-900">
+              <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-xl dark:border-slate-700 dark:bg-slate-900">
                 {searching ? (
                   <div className="px-4 py-3 text-sm text-slate-500">搜尋中...</div>
                 ) : results.length === 0 ? (
@@ -168,7 +175,7 @@ export default function HomePage() {
                           className="flex items-center justify-between px-4 py-3 transition hover:bg-slate-50 dark:hover:bg-slate-800/60"
                         >
                           <div className="flex items-center gap-3">
-                            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                            <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
                               {item.badge}
                             </span>
                             <div>
@@ -189,17 +196,31 @@ export default function HomePage() {
               </div>
             )}
           </div>
+
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-xs">
+            <span className="text-slate-400">熱門關鍵字：</span>
+            {['台北車站', '307', '市政府', '台中', '左營'].map((kw) => (
+              <button
+                key={kw}
+                type="button"
+                onClick={() => setQuery(kw)}
+                className="rounded-full border border-slate-200/80 bg-slate-50 px-2.5 py-1 font-medium text-slate-600 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300 dark:hover:border-blue-700 dark:hover:text-blue-300"
+              >
+                {kw}
+              </button>
+            ))}
+          </div>
         </div>
       </section>
 
-      {/* 六大運具專屬入口 (B 模式核心) */}
+      {/* 六大運具專屬入口 */}
       <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-base font-bold text-slate-900 dark:text-white">
+        <div className="mb-3.5 flex items-center justify-between">
+          <h2 className="text-base font-extrabold tracking-tight text-slate-900 dark:text-white">
             選擇交通工具
           </h2>
-          <span className="text-xs text-slate-500 dark:text-slate-400">
-            各自獨立乾淨視圖
+          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            各運具獨立即時視圖
           </span>
         </div>
 
@@ -210,31 +231,32 @@ export default function HomePage() {
               <Link
                 key={card.href}
                 href={card.href}
-                className={`group relative flex flex-col justify-between rounded-2xl border border-slate-200/90 bg-white p-5 shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900/70 ${card.borderHover}`}
+                className={`transit-card group relative flex flex-col justify-between p-5 transition-all duration-200 hover:-translate-y-1 hover:shadow-lg ${card.borderHover}`}
               >
                 <div>
                   <div className="flex items-start justify-between">
                     <div
-                      className={`flex h-11 w-11 items-center justify-center rounded-xl ${card.colorBg} ${card.colorText}`}
+                      className={`flex h-12 w-12 items-center justify-center rounded-2xl shadow-2xs ring-1 ring-inset ring-black/5 dark:ring-white/10 ${card.colorBg} ${card.colorText}`}
                     >
                       <Icon className="h-6 w-6" />
                     </div>
                     {card.badge && (
-                      <span className="rounded-full bg-blue-600 px-2.5 py-0.5 text-[11px] font-semibold text-white">
+                      <span className="rounded-full bg-blue-600 px-2.5 py-0.5 text-[11px] font-bold text-white shadow-2xs">
                         {card.badge}
                       </span>
                     )}
                   </div>
-                  <h3 className="mt-4 text-lg font-bold text-slate-900 dark:text-white">
+                  <h3 className="mt-4 text-lg font-extrabold tracking-tight text-slate-900 dark:text-white">
                     {card.title}
                   </h3>
-                  <p className="mt-1 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
+                  <p className="mt-1.5 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
                     {card.desc}
                   </p>
                 </div>
 
-                <div className="mt-4 flex items-center text-xs font-semibold text-slate-400 transition-colors group-hover:text-slate-700 dark:group-hover:text-slate-200">
-                  進入查詢 <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                <div className="mt-5 flex items-center text-xs font-bold text-slate-400 transition-all group-hover:text-slate-800 dark:group-hover:text-slate-100">
+                  進入查詢{' '}
+                  <ArrowRight className="ml-1.5 h-3.5 w-3.5 transition-transform group-hover:translate-x-1" />
                 </div>
               </Link>
             );
@@ -247,7 +269,7 @@ export default function HomePage() {
         <section>
           <div className="mb-3 flex items-center gap-2">
             <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-            <h2 className="text-base font-bold text-slate-900 dark:text-white">
+            <h2 className="text-base font-extrabold tracking-tight text-slate-900 dark:text-white">
               常用收藏快捷
             </h2>
           </div>
@@ -257,7 +279,7 @@ export default function HomePage() {
               <Link
                 key={fav.id}
                 href={fav.href}
-                className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-xs transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/60 dark:hover:bg-slate-800/60"
+                className="transit-card flex items-center justify-between px-4 py-3.5 transition hover:-translate-y-0.5 hover:border-amber-300 dark:hover:border-amber-700"
               >
                 <div className="min-w-0">
                   <div className="truncate text-sm font-bold text-slate-900 dark:text-white">

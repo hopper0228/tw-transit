@@ -243,7 +243,7 @@ function ThsrPageInner() {
       </div>
 
       {/* 出發站 + 選填目標站快速篩選 */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+      <div className="transit-card p-4">
         <div className="flex flex-wrap items-center gap-3">
           <select
             value={from}
@@ -319,7 +319,7 @@ function ThsrPageInner() {
           ].map((col) => (
             <div
               key={col.key}
-              className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-900"
+              className="transit-card overflow-hidden"
             >
               <div
                 className={`flex items-center justify-between border-b px-4 py-3 ${col.headerClass}`}
