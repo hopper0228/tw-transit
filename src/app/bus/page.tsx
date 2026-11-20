@@ -76,7 +76,7 @@ function BusPageInner() {
   const initialRoute = searchParams.get('route');
 
   const { coords, status: locStatus, refreshLocation } = useUserLocation();
-  const { nowMs, triggerFrontendRefresh, getCached, fetchWithCache } =
+  const { nowMs, syncVersion, triggerFrontendRefresh, getCached, fetchWithCache } =
     useTransitStore();
   const [detailFetchedAt, setDetailFetchedAt] = useState<number>(0);
   const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
@@ -134,7 +134,7 @@ function BusPageInner() {
       clearTimeout(t);
       controller.abort();
     };
-  }, [city, query, coords, getCached, fetchWithCache]);
+  }, [city, query, coords, getCached, fetchWithCache, syncVersion]);
 
   const loadDetail = useCallback(
     async (routeName: string, dir: 0 | 1, signal?: AbortSignal, force = false) => {

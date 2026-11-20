@@ -67,7 +67,7 @@ function TraPageInner() {
     }
   }, [ready, coords]);
 
-  const { nowMs, triggerFrontendRefresh, getCached, fetchWithCache } =
+  const { nowMs, syncVersion, triggerFrontendRefresh, getCached, fetchWithCache } =
     useTransitStore();
   const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
 
@@ -118,7 +118,7 @@ function TraPageInner() {
       clearTimeout(t);
       controller.abort();
     };
-  }, [loadTra]);
+  }, [loadTra, syncVersion]);
 
   const handleBackgroundRefresh = useCallback(() => {
     void loadTra(undefined, true);

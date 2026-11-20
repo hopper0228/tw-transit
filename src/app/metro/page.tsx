@@ -80,7 +80,7 @@ function MetroPageInner() {
     }
   }, [ready, coords]);
 
-  const { nowMs, triggerFrontendRefresh, getCached, fetchWithCache } =
+  const { nowMs, syncVersion, triggerFrontendRefresh, getCached, fetchWithCache } =
     useTransitStore();
   const [fetchedAt, setFetchedAt] = useState<number>(0);
   const [frontendUpdatedAt, setFrontendUpdatedAt] = useState<string>('');
@@ -123,7 +123,7 @@ function MetroPageInner() {
       clearTimeout(t);
       controller.abort();
     };
-  }, [systemId, loadSystemSnapshot]);
+  }, [systemId, loadSystemSnapshot, syncVersion]);
 
   const detail: MetroStationDetail | null = useMemo(() => {
     if (!snapshot || snapshot.systemId !== systemId) return null;

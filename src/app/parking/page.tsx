@@ -37,7 +37,7 @@ const DISTANCE_FILTERS = [
 function ParkingPageInner() {
   const searchParams = useSearchParams();
   const { coords, status: locStatus, refreshLocation } = useUserLocation();
-  const { triggerFrontendRefresh, getCached, fetchWithCache } =
+  const { syncVersion, triggerFrontendRefresh, getCached, fetchWithCache } =
     useTransitStore();
   const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
 
@@ -122,7 +122,7 @@ function ParkingPageInner() {
       clearTimeout(t);
       controller.abort();
     };
-  }, [loadLots]);
+  }, [loadLots, syncVersion]);
 
   const handleBackgroundRefresh = useCallback(() => {
     void loadLots(undefined, true);

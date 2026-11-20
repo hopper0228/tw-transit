@@ -74,7 +74,7 @@ function ThsrPageInner() {
     }
   }, [ready, coords]);
 
-  const { nowMs, triggerFrontendRefresh, getCached, fetchWithCache } =
+  const { nowMs, syncVersion, triggerFrontendRefresh, getCached, fetchWithCache } =
     useTransitStore();
   const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
 
@@ -127,7 +127,7 @@ function ThsrPageInner() {
       clearTimeout(t);
       controller.abort();
     };
-  }, [loadThsr]);
+  }, [loadThsr, syncVersion]);
 
   const handleBackgroundRefresh = useCallback(() => {
     void loadThsr(undefined, true);

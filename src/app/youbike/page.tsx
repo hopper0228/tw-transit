@@ -30,7 +30,7 @@ const DISTANCE_FILTERS = [
 function YouBikePageInner() {
   const searchParams = useSearchParams();
   const { coords, status: locStatus, refreshLocation } = useUserLocation();
-  const { triggerFrontendRefresh, getCached, fetchWithCache } =
+  const { syncVersion, triggerFrontendRefresh, getCached, fetchWithCache } =
     useTransitStore();
   const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
 
@@ -103,7 +103,7 @@ function YouBikePageInner() {
       clearTimeout(t);
       controller.abort();
     };
-  }, [loadStations]);
+  }, [loadStations, syncVersion]);
 
   const handleBackgroundRefresh = useCallback(() => {
     void loadStations(undefined, true);
