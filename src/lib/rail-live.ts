@@ -140,100 +140,6 @@ async function getMetroSystemTables(
   return byStation;
 }
 
-interface TdxMetroFrequency {
-  LineID?: string;
-  LineNo?: string;
-  ServiceDay?: Record<string, boolean | string>;
-  OperationTime?: { StartTime?: string; EndTime?: string };
-  Headways?: {
-    StartTime: string;
-    EndTime: string;
-    MinHeadwayMins: number;
-    MaxHeadwayMins: number;
-  }[];
-}
-
-const metroFrequencyCache = new Map<
-  string,
-  { expiresAt: number; list: TdxMetroFrequency[] }
->();
-
-async function getMetroSystemFrequencies(
-  sysId: string
-): Promise<TdxMetroFrequency[]> {
-  const now = Date.now();
-  const cached = metroFrequencyCache.get(sysId);
-  if (cached && cached.expiresAt > now) {
-    return cached.list;
-  }
-
-  const raw = await fetchTdx<TdxMetroFrequency[]>(
-    `/v2/Rail/Metro/Frequency/${sysId}?%24format=JSON`,
-    21600
-  ).catch(() => [] as TdxMetroFrequency[]);
-
-  const list = Array.isArray(raw) ? raw : [];
-  if (list.length > 0) {
-    metroFrequencyCache.set(sysId, {
-      expiresAt: now + 6 * 3600 * 1000,
-      list,
-    });
-  }
-  return list;
-}
-
-function getLineHeadwayMins(
-  freqList: TdxMetroFrequency[],
-  lineCode: string,
-  weekday: string,
-  minutesOfDay: number
-): { minMins: number; maxMins: number } | null {
-  const lineFreqs = freqList.filter(
-    (f) => f.LineID === lineCode || f.LineNo === lineCode
-  );
-  if (lineFreqs.length === 0) {
-    // 若 TDX Frequency 因 429 暫未取得，文湖線 (BR) 於營運時段 06:00–24:00 使用官方公告班距作為備援
-    if (lineCode === 'BR') {
-      const adjNow = minutesOfDay < 180 ? minutesOfDay + 1440 : minutesOfDay;
-      if (adjNow >= 360 && adjNow <= 1440) {
-        if (adjNow >= 1380) return { minMins: 12, maxMins: 12 };
-        const isWeekday = weekday !== 'Saturday' && weekday !== 'Sunday';
-        const isPeak =
-          isWeekday &&
-          ((adjNow >= 420 && adjNow <= 540) || (adjNow >= 1020 && adjNow <= 1170));
-        return isPeak ? { minMins: 2, maxMins: 4 } : { minMins: 4, maxMins: 10 };
-      }
-    }
-    return null;
-  }
-
-  const todayFreqs = lineFreqs.filter(
-    (f) => !f.ServiceDay || f.ServiceDay[weekday] === true
-  );
-  const candidates = todayFreqs.length > 0 ? todayFreqs : lineFreqs;
-
-  for (const freq of candidates) {
-    const opStart = parseHhmmToMinutes(freq.OperationTime?.StartTime || '06:00');
-    let opEnd = parseHhmmToMinutes(freq.OperationTime?.EndTime || '24:00');
-    if (opEnd <= opStart) opEnd += 1440;
-    const adjNow = minutesOfDay < 180 ? minutesOfDay + 1440 : minutesOfDay;
-    if (adjNow < opStart || adjNow > opEnd) continue;
-
-    for (const hw of freq.Headways || []) {
-      const s = parseHhmmToMinutes(hw.StartTime);
-      let e = parseHhmmToMinutes(hw.EndTime);
-      if (e <= s) e += 1440;
-      if (adjNow >= s && adjNow <= e) {
-        return {
-          minMins: Math.max(1, hw.MinHeadwayMins || 4),
-          maxMins: Math.max(1, hw.MaxHeadwayMins || hw.MinHeadwayMins || 8),
-        };
-      }
-    }
-  }
-  return null;
-}
-
 const BRANCH_END_TERMINALS = new Set(['R22A', 'G03A', 'O54', 'O21', 'V11', 'V26']);
 const LOOP_METRO_LINES = new Set(['C']);
 
@@ -377,8 +283,7 @@ function buildMetroStationPlatforms(
   ttList: CompactMetroTable[],
   minutesOfDay: number,
   weekday: string,
-  snapshotCreatedAt: number,
-  headway: { minMins: number; maxMins: number } | null
+  snapshotCreatedAt: number
 ): MetroPlatformArrival[] {
   const stations = line.stations;
   const { isStartTerminal, isEndTerminal } = resolveTerminalFlags(
@@ -521,7 +426,6 @@ function buildMetroStationPlatforms(
       } else {
         const nextSched = sched.find((s) => s.sec >= firstSec + 90);
         if (nextSched) secondSec = nextSched.sec;
-        else if (headway) secondSec = firstSec + headway.minMins * 60;
       }
 
       return {
@@ -543,16 +447,6 @@ function buildMetroStationPlatforms(
         destination: dest.startsWith('往') ? dest : `往 ${dest}`,
         nextTrainSeconds: Math.max(15, first.sec),
         followingTrainSeconds: second ? second.sec : 0,
-      };
-    }
-
-    // 中運量或無站點時刻表路線（如文湖線 BR）於營運時段改用 TDX 官方班距
-    if (headway) {
-      return {
-        platformName: platName,
-        destination: defaultDest.startsWith('往') ? defaultDest : `往 ${defaultDest}`,
-        nextTrainSeconds: headway.minMins * 60,
-        followingTrainSeconds: (headway.minMins + headway.maxMins) * 60,
       };
     }
 
@@ -643,9 +537,8 @@ export async function getRealMetroSystemSnapshot(
   }
 
   try {
-    // 冷啟動時依序暖機時刻表與班距快取（6 小時有效），避免與 LiveBoard 併發觸發 TDX 429
+    // 冷啟動時依序暖機時刻表快取（6 小時有效），避免與 LiveBoard 併發觸發 TDX 429
     const byStationTables = await getMetroSystemTables(sys.id);
-    const freqList = await getMetroSystemFrequencies(sys.id);
     const liveRaw = await fetchTdx<TdxMetroLiveBoard[]>(
       `/v2/Rail/Metro/LiveBoard/${sys.id}?%24format=JSON`,
       15
@@ -684,7 +577,6 @@ export async function getRealMetroSystemSnapshot(
         line,
         list
       );
-      const headway = getLineHeadwayMins(freqList, line.code, weekday, minutesOfDay);
       line.stations.forEach((st, idx) => {
         const stationRows =
           rowsByStationId.get(st.id) ??
@@ -699,8 +591,7 @@ export async function getRealMetroSystemSnapshot(
           ttList,
           minutesOfDay,
           weekday,
-          snapshotCreatedAt,
-          headway
+          snapshotCreatedAt
         );
         stations[st.id] = {
           systemId: sys.id,
