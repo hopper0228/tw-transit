@@ -1190,13 +1190,15 @@ export async function getRealThsrData(
   }
 
   try {
-    const [daily, seatData] = await Promise.all([
-      fetchTdx<TdxThsrDaily[]>('/v2/Rail/THSR/DailyTimetable/Today?%24format=JSON', 3600),
-      fetchTdx<TdxThsrSeatList>(
-        `/v2/Rail/THSR/AvailableSeatStatusList/${encodeURIComponent(from)}?%24format=JSON`,
-        60
-      ).catch(() => ({ AvailableSeats: [] })),
-    ]);
+    // 冷啟動時先取得並快取當日高鐵時刻表（3600s），避免與餘位 API 併發觸發 TDX 429
+    const daily = await fetchTdx<TdxThsrDaily[]>(
+      '/v2/Rail/THSR/DailyTimetable/Today?%24format=JSON',
+      3600
+    );
+    const seatData = await fetchTdx<TdxThsrSeatList>(
+      `/v2/Rail/THSR/AvailableSeatStatusList/${encodeURIComponent(from)}?%24format=JSON`,
+      60
+    ).catch(() => ({ AvailableSeats: [] }));
 
     const seatByTrainStop = new Map<
       string,
