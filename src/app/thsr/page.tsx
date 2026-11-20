@@ -201,8 +201,8 @@ function ThsrPageInner() {
     <div className="mx-auto max-w-4xl space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-white">
-            <Zap className="h-6 w-6 text-orange-600" />
+          <h1 className="flex items-center gap-2 text-2xl font-medium tracking-tight text-[#111827] dark:text-[#eef0f5]">
+            <Zap className="h-5 w-5 text-[#4b5565] dark:text-[#a3a9b8]" strokeWidth={1.5} />
             台灣高鐵即時查詢
           </h1>
           <p className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-slate-500 dark:text-slate-400">

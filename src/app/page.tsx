@@ -15,7 +15,8 @@ import {
   Zap,
 } from 'lucide-react';
 import { getFavorites, toggleFavorite } from '@/lib/favorites';
-import { FavoriteItem } from '@/lib/types';
+import { useTransitStore } from '@/lib/transit-store';
+import { FavoriteItem, MetroSystemSnapshot, ThsrTrainRow, TraTrainRow } from '@/lib/types';
 
 interface SearchResultItem {
   mode: 'bus' | 'metro' | 'tra' | 'thsr' | 'youbike' | 'parking';
@@ -28,58 +29,51 @@ interface SearchResultItem {
 const MODE_CARDS = [
   {
     href: '/bus',
-    title: '公車即時查詢',
-    desc: '雙北、桃園、台中、台南、高雄與公路客運到站動態',
-    badge: '主要服務',
+    code: 'BUS',
+    title: '公車即時動態',
+    desc: '雙北、桃園、台中、台南、高雄與公路客運到站時間',
     icon: Bus,
-    colorBg: 'bg-blue-50 dark:bg-blue-950/40',
-    colorText: 'text-blue-600 dark:text-blue-400',
-    borderHover: 'hover:border-blue-300 dark:hover:border-blue-700',
+    dotColor: 'bg-blue-600',
   },
   {
     href: '/metro',
+    code: 'MRT',
     title: '捷運 / 輕軌',
-    desc: '北捷、機捷、中捷、高捷月台倒數與車廂擁擠度',
+    desc: '北捷、新北捷、機捷、中捷、高捷月台倒數與即時列車位置',
     icon: TramFront,
-    colorBg: 'bg-teal-50 dark:bg-teal-950/40',
-    colorText: 'text-teal-600 dark:text-teal-400',
-    borderHover: 'hover:border-teal-300 dark:hover:border-teal-700',
+    dotColor: 'bg-teal-600',
   },
   {
     href: '/tra',
+    code: 'TRA',
     title: '台鐵火車',
-    desc: '車站順逆行即時看板、起訖時刻表與列車誤點資訊',
+    desc: '各站北上南下即時看板、誤點狀態與目標站篩選',
     icon: TrainFront,
-    colorBg: 'bg-indigo-50 dark:bg-indigo-950/40',
-    colorText: 'text-indigo-600 dark:text-indigo-400',
-    borderHover: 'hover:border-indigo-300 dark:hover:border-indigo-700',
+    dotColor: 'bg-indigo-600',
   },
   {
     href: '/thsr',
+    code: 'THSR',
     title: '台灣高鐵',
-    desc: '直達/跳蛙車次查詢、對號座與自由座即時燈號',
+    desc: '北上南下班次時刻、停靠模式與標準／商務座餘位',
     icon: Zap,
-    colorBg: 'bg-orange-50 dark:bg-orange-950/40',
-    colorText: 'text-orange-600 dark:text-orange-400',
-    borderHover: 'hover:border-orange-300 dark:hover:border-orange-700',
+    dotColor: 'bg-orange-600',
   },
   {
     href: '/youbike',
+    code: 'UBIKE',
     title: 'YouBike 微笑單車',
-    desc: '即時可借 2.0 / 2.0E 電輔車數與可還空位查詢',
+    desc: '鄰近站點可借 2.0 / 2.0E 電輔車數與可還空位',
     icon: Bike,
-    colorBg: 'bg-amber-50 dark:bg-amber-950/40',
-    colorText: 'text-amber-600 dark:text-amber-400',
-    borderHover: 'hover:border-amber-300 dark:hover:border-amber-700',
+    dotColor: 'bg-amber-600',
   },
   {
     href: '/parking',
+    code: 'PARK',
     title: '即時停車場',
-    desc: '路外停車場即時剩餘車位、收費標準與一鍵導航',
+    desc: '路外停車場即時剩餘車位、費率說明與導航',
     icon: ParkingCircle,
-    colorBg: 'bg-violet-50 dark:bg-violet-950/40',
-    colorText: 'text-violet-600 dark:text-violet-400',
-    borderHover: 'hover:border-violet-300 dark:hover:border-violet-700',
+    dotColor: 'bg-violet-600',
   },
 ];
 
@@ -88,6 +82,7 @@ export default function HomePage() {
   const [results, setResults] = useState<SearchResultItem[]>([]);
   const [searching, setSearching] = useState(false);
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
+  const { nowMs, getCached } = useTransitStore();
 
   useEffect(() => {
     const t = setTimeout(() => setFavorites(getFavorites()), 0);
@@ -118,76 +113,88 @@ export default function HomePage() {
     setFavorites(toggleFavorite(item));
   };
 
-  return (
-    <div className="space-y-8">
-      {/* Hero & 全域智慧搜尋 */}
-      <section className="transit-card relative overflow-hidden p-6 sm:p-10">
-        <div className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-blue-500/10 blur-3xl dark:bg-blue-500/15" />
-        <div className="pointer-events-none absolute -bottom-24 -left-24 h-64 w-64 rounded-full bg-teal-500/10 blur-3xl dark:bg-teal-500/15" />
+  // 從已預載的前端共享快取讀取即時看板摘要（0 額外 API 請求）
+  const metroCached = getCached<MetroSystemSnapshot>('metro:snapshot:TRTC');
+  const traCached = getCached<{ trains?: TraTrainRow[] }>('tra:board:1000');
+  const thsrCached = getCached<{ trains?: ThsrTrainRow[] }>('thsr:board:1000');
 
-        <div className="relative mx-auto max-w-2xl text-center">
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-blue-200/80 bg-blue-50/80 px-3 py-1 text-xs font-semibold text-blue-700 dark:border-blue-800/60 dark:bg-blue-950/60 dark:text-blue-300">
-            <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
-            六大運具即時整合 · 30 秒自動背景同步
+  const bl12 = metroCached?.data?.stations?.['BL12'];
+  const traNext = traCached?.data?.trains?.[0];
+  const thsrNext = thsrCached?.data?.trains?.[0];
+
+  const liveClock =
+    nowMs > 0
+      ? new Date(nowMs).toLocaleTimeString('zh-TW', { hour12: false })
+      : '--:--:--';
+
+  return (
+    <div className="space-y-10">
+      {/* 非對稱雙欄 Hero：左側查詢入口 + 右側即時車站看板預覽 */}
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-center">
+        <div className="space-y-5 lg:col-span-7">
+          <div className="space-y-2">
+            <h1 className="text-2xl font-medium tracking-tight text-[#111827] dark:text-[#eef0f5] sm:text-4xl sm:leading-tight">
+              全台大眾運輸即時看板
+            </h1>
+            <p className="max-w-xl text-sm leading-relaxed text-[#4b5565] dark:text-[#a3a9b8] sm:text-base">
+              整合公車、捷運、台鐵、高鐵、YouBike 與停車場的即時到離站與剩餘車位資訊
+            </p>
           </div>
-          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white sm:text-4xl">
-            想去哪裡？一秒掌握全台即時交通
-          </h1>
-          <p className="mt-2.5 text-sm text-slate-500 dark:text-slate-400">
-            公車、捷運、台鐵、高鐵、YouBike 與停車場統一即時看板
-          </p>
 
           {/* 搜尋框 */}
-          <div className="relative mt-6">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
+          <div className="relative max-w-xl">
+            <Search
+              className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6b7487] dark:text-[#7a8296]"
+              strokeWidth={1.5}
+            />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜尋路線或站名，例如：307、台北車站、市政府、板橋..."
-              className="w-full rounded-2xl border border-slate-200 bg-white py-3.5 pl-12 pr-10 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 dark:border-slate-700 dark:bg-slate-950/90 dark:text-white dark:focus:border-blue-400"
+              placeholder="搜尋路線或站名，例如 307、台北車站、市政府"
+              className="h-11 w-full rounded-lg border border-slate-900/10 bg-[#ffffff] pl-10 pr-10 text-sm text-[#111827] outline-none transition-colors duration-150 placeholder:text-[#6b7487] focus:border-[#0f4c81] dark:border-slate-100/10 dark:bg-[#11141c] dark:text-[#eef0f5] dark:placeholder:text-[#7a8296] dark:focus:border-[#38bdf8]"
             />
             {query && (
               <button
                 onClick={() => setQuery('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-[#6b7487] transition-colors hover:bg-[#eceff4] hover:text-[#111827] dark:hover:bg-[#1a1e28] dark:hover:text-[#eef0f5]"
                 aria-label="清除搜尋"
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4" strokeWidth={1.5} />
               </button>
             )}
 
             {/* 即時搜尋下拉建議 */}
             {query.trim() && (
-              <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-xl dark:border-slate-700 dark:bg-slate-900">
+              <div className="transit-card absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden text-left shadow-lg">
                 {searching ? (
-                  <div className="px-4 py-3 text-sm text-slate-500">搜尋中...</div>
+                  <div className="px-4 py-3 text-sm text-[#6b7487]">搜尋中</div>
                 ) : results.length === 0 ? (
-                  <div className="px-4 py-3 text-sm text-slate-500">
+                  <div className="px-4 py-3 text-sm text-[#6b7487]">
                     找不到「{query}」的相關交通資訊
                   </div>
                 ) : (
-                  <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+                  <ul className="divide-y divide-slate-900/8 dark:divide-slate-100/8">
                     {results.map((item, idx) => (
                       <li key={`${item.mode}-${idx}`}>
                         <Link
                           href={item.href}
-                          className="flex items-center justify-between px-4 py-3 transition hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                          className="flex items-center justify-between px-4 py-3 transition-colors duration-150 hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]"
                         >
                           <div className="flex items-center gap-3">
-                            <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                            <span className="rounded-md bg-[#eceff4] px-2 py-0.5 font-mono text-[11px] font-medium text-[#4b5565] dark:bg-[#1a1e28] dark:text-[#a3a9b8]">
                               {item.badge}
                             </span>
                             <div>
-                              <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                              <div className="text-sm font-medium text-[#111827] dark:text-[#eef0f5]">
                                 {item.title}
                               </div>
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                              <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">
                                 {item.subtitle}
                               </div>
                             </div>
                           </div>
-                          <ArrowRight className="h-4 w-4 text-slate-400" />
+                          <ArrowRight className="h-4 w-4 text-[#6b7487]" strokeWidth={1.5} />
                         </Link>
                       </li>
                     ))}
@@ -196,31 +203,98 @@ export default function HomePage() {
               </div>
             )}
           </div>
+        </div>
 
-          <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-xs">
-            <span className="text-slate-400">熱門關鍵字：</span>
-            {['台北車站', '307', '市政府', '台中', '左營'].map((kw) => (
-              <button
-                key={kw}
-                type="button"
-                onClick={() => setQuery(kw)}
-                className="rounded-full border border-slate-200/80 bg-slate-50 px-2.5 py-1 font-medium text-slate-600 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300 dark:hover:border-blue-700 dark:hover:text-blue-300"
-              >
-                {kw}
-              </button>
-            ))}
+        {/* 右側產品時刻表預覽卡片（Moment） */}
+        <div className="transit-card overflow-hidden lg:col-span-5">
+          <div className="flex items-center justify-between border-b border-slate-900/8 bg-[#f5f7fa] px-4 py-2.5 dark:border-slate-100/8 dark:bg-[#1a1e28]">
+            <span className="text-xs font-medium text-[#4b5565] dark:text-[#a3a9b8]">
+              台北樞紐即時摘要
+            </span>
+            <span className="font-mono text-xs tabular-nums text-[#6b7487] dark:text-[#7a8296]">
+              {liveClock}
+            </span>
+          </div>
+          <div className="divide-y divide-slate-900/8 dark:divide-slate-100/8">
+            <Link
+              href="/metro"
+              className="flex items-center justify-between px-4 py-3 transition-colors duration-150 hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]"
+            >
+              <div className="flex items-center gap-3">
+                <span className="h-2 w-2 rounded-full bg-teal-600" />
+                <div>
+                  <div className="text-sm font-medium text-[#111827] dark:text-[#eef0f5]">
+                    捷運板南線 台北車站
+                  </div>
+                  <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">
+                    {bl12?.platforms?.[0]?.destination || '往 南港展覽館'}
+                  </div>
+                </div>
+              </div>
+              <span className="font-mono text-sm font-medium tabular-nums text-[#111827] dark:text-[#eef0f5]">
+                {bl12?.platforms?.[0] && bl12.platforms[0].nextTrainSeconds >= 0
+                  ? bl12.platforms[0].nextTrainSeconds <= 30
+                    ? '進站中'
+                    : `${Math.floor(bl12.platforms[0].nextTrainSeconds / 60)} 分`
+                  : '同步中'}
+              </span>
+            </Link>
+
+            <Link
+              href="/tra"
+              className="flex items-center justify-between px-4 py-3 transition-colors duration-150 hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]"
+            >
+              <div className="flex items-center gap-3">
+                <span className="h-2 w-2 rounded-full bg-indigo-600" />
+                <div>
+                  <div className="text-sm font-medium text-[#111827] dark:text-[#eef0f5]">
+                    台鐵 臺北站
+                  </div>
+                  <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">
+                    {traNext
+                      ? `${traNext.trainType} ${traNext.trainNo} 往${traNext.destinationStation}`
+                      : '北上・南下即時看板'}
+                  </div>
+                </div>
+              </div>
+              <span className="font-mono text-sm font-medium tabular-nums text-[#111827] dark:text-[#eef0f5]">
+                {traNext ? traNext.departureTime : '--:--'}
+              </span>
+            </Link>
+
+            <Link
+              href="/thsr"
+              className="flex items-center justify-between px-4 py-3 transition-colors duration-150 hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]"
+            >
+              <div className="flex items-center gap-3">
+                <span className="h-2 w-2 rounded-full bg-orange-600" />
+                <div>
+                  <div className="text-sm font-medium text-[#111827] dark:text-[#eef0f5]">
+                    台灣高鐵 台北站
+                  </div>
+                  <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">
+                    {thsrNext
+                      ? `${thsrNext.trainNo} 次 往${thsrNext.destinationStation}`
+                      : '北上・南下對號與自由座'}
+                  </div>
+                </div>
+              </div>
+              <span className="font-mono text-sm font-medium tabular-nums text-[#111827] dark:text-[#eef0f5]">
+                {thsrNext ? thsrNext.departureTime : '--:--'}
+              </span>
+            </Link>
           </div>
         </div>
       </section>
 
       {/* 六大運具專屬入口 */}
       <section>
-        <div className="mb-3.5 flex items-center justify-between">
-          <h2 className="text-base font-extrabold tracking-tight text-slate-900 dark:text-white">
-            選擇交通工具
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-base font-medium text-[#111827] dark:text-[#eef0f5]">
+            運具查詢
           </h2>
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            各運具獨立即時視圖
+          <span className="font-mono text-xs text-[#6b7487] dark:text-[#7a8296]">
+            6 種運具
           </span>
         </div>
 
@@ -231,32 +305,31 @@ export default function HomePage() {
               <Link
                 key={card.href}
                 href={card.href}
-                className={`transit-card group relative flex flex-col justify-between p-5 transition-all duration-200 hover:-translate-y-1 hover:shadow-lg ${card.borderHover}`}
+                className="transit-card group flex flex-col justify-between p-5 transition-colors duration-150 hover:border-slate-900/20 hover:bg-[#ffffff] dark:hover:border-slate-100/20 dark:hover:bg-[#151923]"
               >
                 <div>
-                  <div className="flex items-start justify-between">
-                    <div
-                      className={`flex h-12 w-12 items-center justify-center rounded-2xl shadow-2xs ring-1 ring-inset ring-black/5 dark:ring-white/10 ${card.colorBg} ${card.colorText}`}
-                    >
-                      <Icon className="h-6 w-6" />
+                  <div className="flex items-center justify-between">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#eceff4] text-[#4b5565] dark:bg-[#1a1e28] dark:text-[#a3a9b8]">
+                      <Icon className="h-4 w-4" strokeWidth={1.5} />
                     </div>
-                    {card.badge && (
-                      <span className="rounded-full bg-blue-600 px-2.5 py-0.5 text-[11px] font-bold text-white shadow-2xs">
-                        {card.badge}
+                    <div className="flex items-center gap-1.5">
+                      <span className={`h-1.5 w-1.5 rounded-full ${card.dotColor}`} />
+                      <span className="font-mono text-[11px] text-[#6b7487] dark:text-[#7a8296]">
+                        {card.code}
                       </span>
-                    )}
+                    </div>
                   </div>
-                  <h3 className="mt-4 text-lg font-extrabold tracking-tight text-slate-900 dark:text-white">
+                  <h3 className="mt-4 text-base font-medium text-[#111827] dark:text-[#eef0f5]">
                     {card.title}
                   </h3>
-                  <p className="mt-1.5 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
+                  <p className="mt-1 text-sm leading-relaxed text-[#4b5565] dark:text-[#a3a9b8]">
                     {card.desc}
                   </p>
                 </div>
 
-                <div className="mt-5 flex items-center text-xs font-bold text-slate-400 transition-all group-hover:text-slate-800 dark:group-hover:text-slate-100">
-                  進入查詢{' '}
-                  <ArrowRight className="ml-1.5 h-3.5 w-3.5 transition-transform group-hover:translate-x-1" />
+                <div className="mt-4 flex items-center text-xs font-medium text-[#6b7487] transition-colors duration-150 group-hover:text-[#111827] dark:text-[#7a8296] dark:group-hover:text-[#eef0f5]">
+                  開啟看板
+                  <ArrowRight className="ml-1.5 h-4 w-4" strokeWidth={1.5} />
                 </div>
               </Link>
             );
@@ -268,9 +341,9 @@ export default function HomePage() {
       {favorites.length > 0 && (
         <section>
           <div className="mb-3 flex items-center gap-2">
-            <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-            <h2 className="text-base font-extrabold tracking-tight text-slate-900 dark:text-white">
-              常用收藏快捷
+            <Star className="h-4 w-4 text-[#6b7487] dark:text-[#7a8296]" strokeWidth={1.5} />
+            <h2 className="text-base font-medium text-[#111827] dark:text-[#eef0f5]">
+              常用收藏
             </h2>
           </div>
 
@@ -279,22 +352,22 @@ export default function HomePage() {
               <Link
                 key={fav.id}
                 href={fav.href}
-                className="transit-card flex items-center justify-between px-4 py-3.5 transition hover:-translate-y-0.5 hover:border-amber-300 dark:hover:border-amber-700"
+                className="transit-card flex items-center justify-between px-4 py-3.5 transition-colors duration-150 hover:border-slate-900/20 dark:hover:border-slate-100/20"
               >
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-bold text-slate-900 dark:text-white">
+                  <div className="truncate text-sm font-medium text-[#111827] dark:text-[#eef0f5]">
                     {fav.title}
                   </div>
-                  <div className="truncate text-xs text-slate-500 dark:text-slate-400">
+                  <div className="truncate text-xs text-[#6b7487] dark:text-[#7a8296]">
                     {fav.subtitle}
                   </div>
                 </div>
                 <button
                   onClick={(e) => handleRemoveFavorite(e, fav)}
                   title="取消收藏"
-                  className="ml-2 rounded-lg p-1.5 text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  className="ml-2 rounded-lg p-1.5 text-amber-500 transition-colors hover:bg-[#eceff4] dark:hover:bg-[#1a1e28]"
                 >
-                  <Star className="h-4 w-4 fill-amber-400" />
+                  <Star className="h-4 w-4 fill-amber-400" strokeWidth={1.5} />
                 </button>
               </Link>
             ))}

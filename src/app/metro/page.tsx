@@ -492,12 +492,12 @@ function MetroPageInner() {
                   <div>
                     <div className="text-[11px] font-medium text-slate-400">下一班車</div>
                     <div
-                      className={`mt-1 text-3xl font-extrabold tracking-tight tabular-nums ${
+                      className={`mt-1 font-mono text-3xl font-medium tracking-tight tabular-nums ${
                         hasRealNext && liveNext <= 45
-                          ? 'text-red-600 animate-pulse dark:text-red-400'
+                          ? 'text-[#dc2626] dark:text-[#e5484d]'
                           : hasRealNext
-                            ? 'text-slate-900 dark:text-white'
-                            : 'text-base font-semibold text-slate-400'
+                            ? 'text-[#111827] dark:text-[#eef0f5]'
+                            : 'text-base font-medium text-[#6b7487] dark:text-[#7a8296]'
                       }`}
                     >
                       {hasRealNext ? formatCountdown(liveNext) : '列車調度中'}
