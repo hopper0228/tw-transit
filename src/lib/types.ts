@@ -109,6 +109,8 @@ export interface TraTrainRow {
 
 export interface ThsrTrainRow {
   trainNo: string;
+  direction?: 0 | 1; // 0=南下, 1=北上
+  bound?: 'north' | 'south';
   originStation: string;
   destinationStation: string;
   departureTime: string;
@@ -118,6 +120,13 @@ export interface ThsrTrainRow {
   standardSeatStatus: 'available' | 'limited' | 'full';
   businessSeatStatus: 'available' | 'limited' | 'full';
   nonReservedCars: string; // 例如 "10-12車"
+  remainingStops?: {
+    stationId: string;
+    stationName: string;
+    arrivalTime: string;
+    standardSeatStatus?: 'available' | 'limited' | 'full';
+    businessSeatStatus?: 'available' | 'limited' | 'full';
+  }[];
 }
 
 export interface YouBikeStation {

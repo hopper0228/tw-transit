@@ -1169,7 +1169,7 @@ function mapSeatCode(code?: 'O' | 'L' | 'X'): 'available' | 'limited' | 'full' {
 
 export async function getRealThsrData(
   from: string,
-  to: string
+  to?: string
 ): Promise<{
   trains: ThsrTrainRow[];
   liveVehicles: LiveRailVehicle[];
@@ -1198,22 +1198,26 @@ export async function getRealThsrData(
       ).catch(() => ({ AvailableSeats: [] })),
     ]);
 
-    const seatMap = new Map<
+    const seatByTrainStop = new Map<
       string,
-      { std: 'available' | 'limited' | 'full'; biz: 'available' | 'limited' | 'full' }
+      Map<string, { std: 'available' | 'limited' | 'full'; biz: 'available' | 'limited' | 'full' }>
     >();
     for (const s of seatData?.AvailableSeats || []) {
-      const target = s.StopStations?.find((st) => st.StationID === to);
-      if (target) {
-        seatMap.set(s.TrainNo, {
-          std: mapSeatCode(target.StandardSeatStatus),
-          biz: mapSeatCode(target.BusinessSeatStatus),
+      const stMap = new Map<
+        string,
+        { std: 'available' | 'limited' | 'full'; biz: 'available' | 'limited' | 'full' }
+      >();
+      for (const st of s.StopStations || []) {
+        stMap.set(st.StationID, {
+          std: mapSeatCode(st.StandardSeatStatus),
+          biz: mapSeatCode(st.BusinessSeatStatus),
         });
       }
+      seatByTrainStop.set(s.TrainNo, stMap);
     }
 
     const dailyList = Array.isArray(daily) ? daily : [];
-    const odTrains: ThsrTrainRow[] = [];
+    const matchedTrains: ThsrTrainRow[] = [];
     const liveVehicles: LiveRailVehicle[] = [];
 
     for (const item of dailyList) {
@@ -1254,20 +1258,33 @@ export async function getRealThsrData(
         }
       }
 
-      // 2. 篩選起訖站符合的班次
+      // 2. 篩選停靠出發站的班次（含北上/南下與下游停靠站供前端 0ms 篩選）
       const fromIdx = stops.findIndex((s) => s.StationID === from);
-      const toIdx = stops.findIndex((s) => s.StationID === to);
-      if (fromIdx >= 0 && toIdx > fromIdx) {
-        const sFrom = stops[fromIdx];
+      if (fromIdx < 0 || fromIdx >= stops.length - 1) continue;
+
+      const isNorth =
+        item.DailyTrainInfo.Direction === 1 ||
+        Number(stops[stops.length - 1].StationID) < Number(stops[0].StationID);
+      const direction: 0 | 1 = isNorth ? 1 : 0;
+      const bound: 'north' | 'south' = isNorth ? 'north' : 'south';
+      const trainSeatMap = seatByTrainStop.get(item.DailyTrainInfo.TrainNo);
+      const sFrom = stops[fromIdx];
+
+      if (to) {
+        const toIdx = stops.findIndex((s, idx) => idx > fromIdx && s.StationID === to);
+        if (toIdx === -1) continue;
         const sTo = stops[toIdx];
-        const dur = parseHhmmToMinutes(sTo.ArrivalTime) - parseHhmmToMinutes(sFrom.DepartureTime);
-        const seats = seatMap.get(item.DailyTrainInfo.TrainNo);
+        let dur = parseHhmmToMinutes(sTo.ArrivalTime) - parseHhmmToMinutes(sFrom.DepartureTime);
+        if (dur < 0) dur += 1440;
+        const seats = trainSeatMap?.get(to);
         const stopCount = toIdx - fromIdx;
         const stopPattern: ThsrTrainRow['stopPattern'] =
           stopCount <= 2 ? '直達' : stopCount <= 5 ? '跳蛙' : '站站停';
 
-        odTrains.push({
+        matchedTrains.push({
           trainNo: item.DailyTrainInfo.TrainNo,
+          direction,
+          bound,
           originStation: sFrom.StationName?.Zh_tw || '',
           destinationStation: sTo.StationName?.Zh_tw || '',
           departureTime: sFrom.DepartureTime.slice(0, 5),
@@ -1278,14 +1295,62 @@ export async function getRealThsrData(
           businessSeatStatus: seats?.biz ?? 'available',
           nonReservedCars: '10-12車',
         });
+      } else {
+        const sEnd = stops[stops.length - 1];
+        let dur = parseHhmmToMinutes(sEnd.ArrivalTime) - parseHhmmToMinutes(sFrom.DepartureTime);
+        if (dur < 0) dur += 1440;
+        const stopCount = stops.length - 1 - fromIdx;
+        const stopPattern: ThsrTrainRow['stopPattern'] =
+          stops.length <= 5 ? '直達' : stops.length <= 9 ? '跳蛙' : '站站停';
+        const endSeats = trainSeatMap?.get(sEnd.StationID) ?? trainSeatMap?.get(stops[fromIdx + 1].StationID);
+        const remainingStops = stops.slice(fromIdx + 1).map((st) => {
+          const stSeats = trainSeatMap?.get(st.StationID);
+          return {
+            stationId: st.StationID,
+            stationName: st.StationName?.Zh_tw || st.StationID,
+            arrivalTime: st.ArrivalTime.slice(0, 5),
+            standardSeatStatus: stSeats?.std ?? 'available',
+            businessSeatStatus: stSeats?.biz ?? 'available',
+          };
+        });
+        void stopCount;
+
+        matchedTrains.push({
+          trainNo: item.DailyTrainInfo.TrainNo,
+          direction,
+          bound,
+          originStation: sFrom.StationName?.Zh_tw || '',
+          destinationStation:
+            item.DailyTrainInfo.EndingStationName?.Zh_tw || sEnd.StationName?.Zh_tw || '',
+          departureTime: sFrom.DepartureTime.slice(0, 5),
+          arrivalTime: sEnd.ArrivalTime.slice(0, 5),
+          durationMinutes: dur,
+          stopPattern,
+          standardSeatStatus: endSeats?.std ?? 'available',
+          businessSeatStatus: endSeats?.biz ?? 'available',
+          nonReservedCars: '10-12車',
+          remainingStops,
+        });
       }
     }
 
-    odTrains.sort((a, b) => a.departureTime.localeCompare(b.departureTime));
-    const upcoming = odTrains.filter((t) => t.departureTime >= hhmm);
+    matchedTrains.sort((a, b) => a.departureTime.localeCompare(b.departureTime));
+
+    let trains: ThsrTrainRow[];
+    if (to) {
+      const upcoming = matchedTrains.filter((t) => t.departureTime >= hhmm);
+      trains = (upcoming.length > 0 ? upcoming : matchedTrains).slice(0, 20);
+    } else {
+      const pickBound = (b: 'north' | 'south') => {
+        const all = matchedTrains.filter((t) => t.bound === b);
+        const upcoming = all.filter((t) => t.departureTime >= hhmm);
+        return (upcoming.length > 0 ? upcoming : all).slice(0, 20);
+      };
+      trains = [...pickBound('north'), ...pickBound('south')];
+    }
 
     return {
-      trains: (upcoming.length > 0 ? upcoming : odTrains).slice(0, 20),
+      trains,
       liveVehicles,
       updatedAt: timeStr,
       sourceUpdatedAt: Date.now(),

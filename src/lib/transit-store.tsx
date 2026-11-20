@@ -152,11 +152,10 @@ export function TransitStoreProvider({
       ? findNearestRailStation(coords.lat, coords.lng, THSR_STATIONS, 'thsr')
       : null;
     const thsrFrom = nearestThsr?.id || '1000';
-    const thsrTo = thsrFrom === '1040' ? '1070' : '1040';
     const tThsr = setTimeout(() => {
       void fetchWithCache(
-        `thsr:${thsrFrom}:${thsrTo}`,
-        `/api/transit/thsr?from=${encodeURIComponent(thsrFrom)}&to=${encodeURIComponent(thsrTo)}`
+        `thsr:board:${thsrFrom}`,
+        `/api/transit/thsr?from=${encodeURIComponent(thsrFrom)}`
       ).catch(() => {});
     }, 1200);
 

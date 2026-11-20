@@ -4,9 +4,9 @@ import { getRealThsrData } from '@/lib/rail-live';
 
 export async function GET(req: NextRequest) {
   const from = req.nextUrl.searchParams.get('from') || '1000';
-  const to = req.nextUrl.searchParams.get('to') || '1040';
+  const to = req.nextUrl.searchParams.get('to') || '';
 
-  const result = await getRealThsrData(from, to);
+  const result = await getRealThsrData(from, to || undefined);
 
   return NextResponse.json(
     {
