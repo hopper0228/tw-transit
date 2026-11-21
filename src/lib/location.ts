@@ -62,13 +62,29 @@ export function useUserLocation() {
     setStatus('locating');
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        const next: GeoCoords = {
+        setManualCoords({
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
-        };
-        setManualCoords(next);
+        });
       },
-      () => {
+      (err) => {
+        // 若高精度定位逾時或暫時不可用 (非拒絕權限)，降級改用一般定位再試一次
+        if (err.code !== 1) {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              setManualCoords({
+                lat: pos.coords.latitude,
+                lng: pos.coords.longitude,
+              });
+            },
+            () => {
+              setStatus((prev) => (prev === 'granted' ? 'granted' : 'denied'));
+              setReady(true);
+            },
+            { enableHighAccuracy: false, timeout: 5000, maximumAge: 15000 }
+          );
+          return;
+        }
         setStatus((prev) => (prev === 'granted' ? 'granted' : 'denied'));
         setReady(true);
       },

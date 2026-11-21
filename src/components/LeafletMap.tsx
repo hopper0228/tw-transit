@@ -237,7 +237,7 @@ export default function LeafletMap({
         map.fitBounds(line.getBounds(), { padding: [30, 30] });
         hasFittedBoundsRef.current = true;
       }
-    } else if (markers.length > 0 && !hasFittedBoundsRef.current) {
+    } else if (markers.length > 0 && !hasFittedBoundsRef.current && !userCoords) {
       const bounds = L.latLngBounds(markers.map((m) => [m.lat, m.lng]));
       if (bounds.isValid()) {
         suppressNextMoveRef.current = true;
@@ -413,9 +413,9 @@ export default function LeafletMap({
       .bindPopup('<strong>您的目前位置</strong>')
       .addTo(userGroup);
 
-    if (lastUserCoordsKeyRef.current && lastUserCoordsKeyRef.current !== coordKey && !focusMarkerId) {
+    if (lastUserCoordsKeyRef.current !== coordKey && !focusMarkerId) {
       map.setView([userCoords.lat, userCoords.lng], Math.max(map.getZoom(), 15), {
-        animate: true,
+        animate: Boolean(lastUserCoordsKeyRef.current),
       });
     }
     lastUserCoordsKeyRef.current = coordKey;

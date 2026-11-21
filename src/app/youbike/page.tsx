@@ -30,7 +30,13 @@ const DISTANCE_FILTERS = [
 
 function YouBikePageInner() {
   const searchParams = useSearchParams();
-  const { coords, status: locStatus, refreshLocation, setManualCoords } = useUserLocation();
+  const {
+    coords,
+    ready: locReady,
+    status: locStatus,
+    refreshLocation,
+    setManualCoords,
+  } = useUserLocation();
   const { syncVersion, triggerFrontendRefresh, getCached, fetchWithCache } =
     useTransitStore();
   const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
@@ -98,6 +104,7 @@ function YouBikePageInner() {
   );
 
   useEffect(() => {
+    if (!locReady) return;
     const controller = new AbortController();
     const t = setTimeout(() => {
       void loadStations(controller.signal);
@@ -106,7 +113,7 @@ function YouBikePageInner() {
       clearTimeout(t);
       controller.abort();
     };
-  }, [loadStations, syncVersion]);
+  }, [locReady, loadStations, syncVersion]);
 
   const handleBackgroundRefresh = useCallback(() => {
     void loadStations(undefined, true);
@@ -226,25 +233,29 @@ function YouBikePageInner() {
 
       {viewMode === 'map' ? (
         <div className="space-y-2.5">
-          <LeafletMap
-            center={
-              focusedStation
-                ? [focusedStation.lat, focusedStation.lng]
-                : coords
-                  ? [coords.lat, coords.lng]
-                  : undefined
-            }
-            zoom={focusedStation ? 16 : 13}
-            markers={markers}
-            focusMarkerId={focusedStation?.stationUid || null}
-            userCoords={coords}
-            onUserLocate={(next) => {
-              setFocusedStation(null);
-              setManualCoords(next);
-            }}
-            heightClass="h-[500px]"
-            onBoundsChange={(b) => setMapBounds(b)}
-          />
+          {locReady ? (
+            <LeafletMap
+              center={
+                focusedStation
+                  ? [focusedStation.lat, focusedStation.lng]
+                  : coords
+                    ? [coords.lat, coords.lng]
+                    : undefined
+              }
+              zoom={focusedStation ? 16 : coords ? 15 : 13}
+              markers={markers}
+              focusMarkerId={focusedStation?.stationUid || null}
+              userCoords={coords}
+              onUserLocate={(next) => {
+                setFocusedStation(null);
+                setManualCoords(next);
+              }}
+              heightClass="h-[500px]"
+              onBoundsChange={(b) => setMapBounds(b)}
+            />
+          ) : (
+            <div className="h-[500px] w-full animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />
+          )}
           <p className="text-center text-xs text-slate-500">
             移動或縮放地圖即自動更新該範圍站點（跨台北／新北） · 目前顯示 {stations.length} 站（共符合 {totalCount} 站）
           </p>

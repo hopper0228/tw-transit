@@ -32,7 +32,7 @@ export default function LocationBanner({
           {status === 'locating'
             ? '正在取得裝置目前位置...'
             : coords
-            ? label
+            ? `${label} (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`
             : '未取得定位權限，目前顯示預設排序'}
         </span>
       </div>
