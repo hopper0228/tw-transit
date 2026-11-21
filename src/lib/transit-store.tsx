@@ -32,12 +32,16 @@ interface TransitStoreContextValue {
   syncCountdown: number;
   /** 全域統一背景同步是否進行中 */
   isSyncing: boolean;
+  /** 全域統一「已更新」提示狀態（跨頁面同步） */
+  justUpdated: boolean;
   /** 全域統一同步版本號，每次統一更新完成後遞增，供各頁讀取最新快取 */
   syncVersion: number;
   /** 最近一次同步時間字串 */
   lastSyncLabel: string;
   /** 手動僅更新前端時間戳 (不重打後端 API) */
   triggerFrontendRefresh: () => string;
+  /** 手動觸發全站所有頁面同步後端最新資料並重置 30 秒倒數 */
+  triggerSyncAll: () => Promise<void>;
   /** 從前端記憶體或 sessionStorage 快取讀取已載入資料 */
   getCached: <T>(key: string) => CacheEntry<T> | undefined;
   /** 透過共享快取 + in-flight 去重向後端取得資料；已有快取且非 force 時不重打後端 */
@@ -93,8 +97,10 @@ export function TransitStoreProvider({
   const [nowMs, setNowMs] = useState<number>(0);
   const [syncCountdown, setSyncCountdown] = useState<number>(SYNC_INTERVAL_SEC);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [justUpdated, setJustUpdated] = useState<boolean>(false);
   const [syncVersion, setSyncVersion] = useState<number>(0);
   const [lastSyncLabel, setLastSyncLabel] = useState<string>('');
+  const justUpdatedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cacheRef = useRef<Map<string, CacheEntry>>(new Map());
   const inFlightRef = useRef<Map<string, Promise<unknown>>>(new Map());
@@ -225,6 +231,17 @@ export function TransitStoreProvider({
     [hydrateFromSession, setCacheEntry]
   );
 
+  const markJustUpdated = useCallback(() => {
+    if (justUpdatedTimerRef.current) {
+      clearTimeout(justUpdatedTimerRef.current);
+    }
+    setJustUpdated(true);
+    justUpdatedTimerRef.current = setTimeout(() => {
+      setJustUpdated(false);
+      justUpdatedTimerRef.current = null;
+    }, 2000);
+  }, []);
+
   const syncAllActive = useCallback(async () => {
     const targets = Array.from(activeTargetsRef.current.values());
     if (targets.length === 0) return;
@@ -252,10 +269,16 @@ export function TransitStoreProvider({
         new Date(now).toLocaleTimeString('zh-TW', { hour12: false })
       );
       setSyncVersion((v) => v + 1);
+      markJustUpdated();
     } finally {
       setIsSyncing(false);
     }
-  }, [fetchWithCache]);
+  }, [fetchWithCache, markJustUpdated]);
+
+  const triggerSyncAll = useCallback(async () => {
+    setSyncCountdown(SYNC_INTERVAL_SEC);
+    await syncAllActive();
+  }, [syncAllActive]);
 
   const syncAllActiveRef = useRef(syncAllActive);
   useEffect(() => {
@@ -393,9 +416,11 @@ export function TransitStoreProvider({
         nowMs,
         syncCountdown,
         isSyncing,
+        justUpdated,
         syncVersion,
         lastSyncLabel,
         triggerFrontendRefresh,
+        triggerSyncAll,
         getCached,
         fetchWithCache,
       }}

@@ -19,30 +19,35 @@ interface AutoRefreshBadgeProps {
 
 export default function AutoRefreshBadge({
   intervalSeconds = 30,
-  onRefresh,
   onManualRefresh,
   isRefreshing,
 }: AutoRefreshBadgeProps) {
-  const { syncCountdown, isSyncing, triggerFrontendRefresh } =
-    useTransitStore();
-  const [justUpdated, setJustUpdated] = useState(false);
+  const {
+    syncCountdown,
+    isSyncing,
+    justUpdated: globalJustUpdated,
+    triggerFrontendRefresh,
+    triggerSyncAll,
+  } = useTransitStore();
+  const [localJustUpdated, setLocalJustUpdated] = useState(false);
 
   const busy = isRefreshing || isSyncing;
+  const justUpdated = !busy && (globalJustUpdated || localJustUpdated);
   const prevBusyRef = useRef(busy);
 
   useEffect(() => {
     const wasBusy = prevBusyRef.current;
     prevBusyRef.current = busy;
 
-    if (wasBusy && !busy) {
-      const showTimer = setTimeout(() => setJustUpdated(true), 0);
-      const hideTimer = setTimeout(() => setJustUpdated(false), 2000);
+    if (wasBusy && !busy && !globalJustUpdated) {
+      const showTimer = setTimeout(() => setLocalJustUpdated(true), 0);
+      const hideTimer = setTimeout(() => setLocalJustUpdated(false), 2000);
       return () => {
         clearTimeout(showTimer);
         clearTimeout(hideTimer);
       };
     }
-  }, [busy]);
+  }, [busy, globalJustUpdated]);
 
   const handleManualClick = () => {
     if (onManualRefresh) {
@@ -50,12 +55,7 @@ export default function AutoRefreshBadge({
     } else {
       triggerFrontendRefresh();
     }
-    if (onRefresh) {
-      onRefresh();
-    } else {
-      setJustUpdated(true);
-      setTimeout(() => setJustUpdated(false), 1800);
-    }
+    void triggerSyncAll();
   };
 
   const progressPct = Math.min(
