@@ -17,7 +17,9 @@ import {
 import {
   DepartureWindowMode,
   filterByDepartureWindow,
-  getDefaultTaipeiHhmm,
+  getDefaultTaipeiHourMinute15,
+  HOURS_24,
+  MINUTES_15,
 } from '@/lib/rail-time';
 import { LiveRailVehicle, TraTrainRow } from '@/lib/types';
 
@@ -53,8 +55,13 @@ function TraPageInner() {
   const [targetStation, setTargetStation] = useState(searchParams.get('to') || '');
   const [trains, setTrains] = useState<TraTrainRow[]>([]);
   const [selectedTrain, setSelectedTrain] = useState<TraTrainRow | null>(null);
-  const [departureMode, setDepartureMode] = useState<DepartureWindowMode>('now30');
-  const [customTime, setCustomTime] = useState<string>(() => getDefaultTaipeiHhmm());
+  const [departureMode, setDepartureMode] = useState<DepartureWindowMode>('now60');
+  const [customHour, setCustomHour] = useState<string>(
+    () => getDefaultTaipeiHourMinute15().hour
+  );
+  const [customMinute, setCustomMinute] = useState<string>(
+    () => getDefaultTaipeiHourMinute15().minute
+  );
   const [liveVehicles, setLiveVehicles] = useState<LiveRailVehicle[]>([]);
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
@@ -143,8 +150,14 @@ function TraPageInner() {
           t.remainingStops?.some((s) => s.stationId === targetStation)
         )
       : trains;
-    return filterByDepartureWindow(byTarget, departureMode, customTime, nowMs);
-  }, [trains, targetStation, departureMode, customTime, nowMs]);
+    return filterByDepartureWindow(
+      byTarget,
+      departureMode,
+      customHour,
+      customMinute,
+      nowMs
+    );
+  }, [trains, targetStation, departureMode, customHour, customMinute, nowMs]);
 
   const targetStationName = useMemo(
     () => TRA_STATIONS.find((s) => s.id === targetStation)?.name || '',
@@ -277,17 +290,37 @@ function TraPageInner() {
                   onChange={(e) => setDepartureMode(e.target.value as DepartureWindowMode)}
                   className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
                 >
-                  <option value="now30">現在起 30 分內</option>
-                  <option value="custom30">指定時間（30 分內）</option>
+                  <option value="now60">現在起 1 小時內</option>
+                  <option value="custom60">指定時間（1 小時內）</option>
                   <option value="all">今日剩餘全部</option>
                 </select>
-                {departureMode === 'custom30' && (
-                  <input
-                    type="time"
-                    value={customTime}
-                    onChange={(e) => setCustomTime(e.target.value)}
-                    className="rounded-xl border border-slate-300 bg-slate-50 px-2.5 py-1.5 font-mono text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
-                  />
+                {departureMode === 'custom60' && (
+                  <div className="flex items-center gap-1">
+                    <select
+                      value={customHour}
+                      onChange={(e) => setCustomHour(e.target.value)}
+                      className="rounded-xl border border-slate-300 bg-slate-50 px-2.5 py-1.5 font-mono text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+                      aria-label="選擇發車小時"
+                    >
+                      {HOURS_24.map((h) => (
+                        <option key={h} value={h}>
+                          {h} 時
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={customMinute}
+                      onChange={(e) => setCustomMinute(e.target.value)}
+                      className="rounded-xl border border-slate-300 bg-slate-50 px-2.5 py-1.5 font-mono text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+                      aria-label="選擇發車分鐘"
+                    >
+                      {MINUTES_15.map((m) => (
+                        <option key={m} value={m}>
+                          {m} 分
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 )}
               </div>
 
@@ -500,9 +533,9 @@ function TraPageInner() {
           const rawLoc = selectedTrain.currentLocation || '';
           const trainAction = rawLoc.includes('進站')
             ? '進站中'
-            : rawLoc.includes('停靠')
-              ? '停靠中'
-              : rawLoc.includes('離站')
+            : rawLoc.includes('到站') || rawLoc.includes('停靠')
+              ? '已到站'
+              : rawLoc.includes('發車') || rawLoc.includes('離站')
                 ? '已發車'
                 : '';
 

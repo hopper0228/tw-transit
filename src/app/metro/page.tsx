@@ -53,7 +53,7 @@ function MetroPageInner() {
     currentSys.lines[0];
 
   const [stationId, setStationId] = useState(
-    searchParams.get('station') || currentSys.lines[0].stations[11]?.id || currentSys.lines[0].stations[0].id
+    searchParams.get('station') || 'BL12'
   );
   const [stationQuery, setStationQuery] = useState('');
   const [snapshot, setSnapshot] = useState<MetroSystemSnapshot | null>(null);

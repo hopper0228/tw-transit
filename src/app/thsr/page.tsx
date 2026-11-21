@@ -17,7 +17,9 @@ import {
 import {
   DepartureWindowMode,
   filterByDepartureWindow,
-  getDefaultTaipeiHhmm,
+  getDefaultTaipeiHourMinute15,
+  HOURS_24,
+  MINUTES_15,
 } from '@/lib/rail-time';
 import { LiveRailVehicle, ThsrTrainRow } from '@/lib/types';
 
@@ -59,8 +61,13 @@ function ThsrPageInner() {
   const [targetStation, setTargetStation] = useState(searchParams.get('to') || '');
   const [trains, setTrains] = useState<ThsrTrainRow[]>([]);
   const [selectedTrain, setSelectedTrain] = useState<ThsrTrainRow | null>(null);
-  const [departureMode, setDepartureMode] = useState<DepartureWindowMode>('now30');
-  const [customTime, setCustomTime] = useState<string>(() => getDefaultTaipeiHhmm());
+  const [departureMode, setDepartureMode] = useState<DepartureWindowMode>('now60');
+  const [customHour, setCustomHour] = useState<string>(
+    () => getDefaultTaipeiHourMinute15().hour
+  );
+  const [customMinute, setCustomMinute] = useState<string>(
+    () => getDefaultTaipeiHourMinute15().minute
+  );
   const [liveVehicles, setLiveVehicles] = useState<LiveRailVehicle[]>([]);
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
@@ -156,12 +163,18 @@ function ThsrPageInner() {
           t.remainingStops?.some((s) => s.stationId === targetStation)
         )
       : trains;
-    const filtered = filterByDepartureWindow(byTarget, departureMode, customTime, nowMs);
+    const filtered = filterByDepartureWindow(
+      byTarget,
+      departureMode,
+      customHour,
+      customMinute,
+      nowMs
+    );
     return {
       northTrains: filtered.filter((t) => t.bound === 'north' || t.direction === 1),
       southTrains: filtered.filter((t) => t.bound === 'south' || t.direction === 0),
     };
-  }, [trains, targetStation, departureMode, customTime, nowMs]);
+  }, [trains, targetStation, departureMode, customHour, customMinute, nowMs]);
 
   const thsrMapData = useMemo(() => {
     const stationsWithCoord = THSR_STATIONS.map((s) => {
@@ -289,18 +302,38 @@ function ThsrPageInner() {
             onChange={(e) => setDepartureMode(e.target.value as DepartureWindowMode)}
             className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
           >
-            <option value="now30">發車：現在起 30 分內</option>
-            <option value="custom30">發車：指定時間（30 分內）</option>
+            <option value="now60">發車：現在起 1 小時內</option>
+            <option value="custom60">發車：指定時間（1 小時內）</option>
             <option value="all">發車：今日剩餘全部</option>
           </select>
 
-          {departureMode === 'custom30' && (
-            <input
-              type="time"
-              value={customTime}
-              onChange={(e) => setCustomTime(e.target.value)}
-              className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
-            />
+          {departureMode === 'custom60' && (
+            <div className="flex items-center gap-1.5">
+              <select
+                value={customHour}
+                onChange={(e) => setCustomHour(e.target.value)}
+                className="rounded-xl border border-slate-300 bg-slate-50 px-2.5 py-2.5 font-mono text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+                aria-label="選擇發車小時"
+              >
+                {HOURS_24.map((h) => (
+                  <option key={h} value={h}>
+                    {h} 時
+                  </option>
+                ))}
+              </select>
+              <select
+                value={customMinute}
+                onChange={(e) => setCustomMinute(e.target.value)}
+                className="rounded-xl border border-slate-300 bg-slate-50 px-2.5 py-2.5 font-mono text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+                aria-label="選擇發車分鐘"
+              >
+                {MINUTES_15.map((m) => (
+                  <option key={m} value={m}>
+                    {m} 分
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
 
           <AutoRefreshBadge

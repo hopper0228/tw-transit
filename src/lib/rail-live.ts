@@ -910,8 +910,8 @@ export async function getRealTraData(
       item.TrainStationStatus === 0
         ? '進站中'
         : item.TrainStationStatus === 1
-          ? '停靠中'
-          : '已離站行駛中';
+          ? '已到站'
+          : '已發車';
     liveLocMap.set(
       item.TrainNo,
       `${item.StationName?.Zh_tw || item.StationID}（${statusLabel}）`

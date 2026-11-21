@@ -1,4 +1,10 @@
-export type DepartureWindowMode = 'now30' | 'custom30' | 'all';
+export type DepartureWindowMode = 'now60' | 'custom60' | 'all';
+
+export const HOURS_24 = Array.from({ length: 24 }, (_, i) =>
+  String(i).padStart(2, '0')
+);
+
+export const MINUTES_15 = ['00', '15', '30', '45'] as const;
 
 function getCurrentTaipeiMinutes(nowMs: number): number {
   const d = new Date(nowMs > 0 ? nowMs : Date.now());
@@ -13,29 +19,34 @@ function getCurrentTaipeiMinutes(nowMs: number): number {
   return h * 60 + m;
 }
 
-export function getDefaultTaipeiHhmm(): string {
+export function getDefaultTaipeiHourMinute15(): { hour: string; minute: string } {
   const mins = getCurrentTaipeiMinutes(Date.now());
   const h = Math.floor(mins / 60) % 24;
-  const m = mins % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  const q = Math.floor((mins % 60) / 15) * 15;
+  return {
+    hour: String(h).padStart(2, '0'),
+    minute: String(q).padStart(2, '0'),
+  };
 }
 
 /**
- * 依指定發車時間窗過濾班次（預設顯示基準時間起 30 分鐘內）
+ * 依指定發車時間窗過濾班次（預設顯示基準時間起接下來 1 小時內）
  */
 export function filterByDepartureWindow<
   T extends { departureTime: string; delayMinutes?: number }
 >(
   list: T[],
   mode: DepartureWindowMode,
-  customTime: string,
+  customHour: string,
+  customMinute: string,
   nowMs: number
 ): T[] {
   if (mode === 'all') return list;
 
   let baseMin = getCurrentTaipeiMinutes(nowMs);
-  if (mode === 'custom30' && customTime.includes(':')) {
-    const [ch, cm] = customTime.split(':').map(Number);
+  if (mode === 'custom60') {
+    const ch = Number(customHour);
+    const cm = Number(customMinute);
     if (Number.isFinite(ch) && Number.isFinite(cm)) {
       baseMin = ch * 60 + cm;
     }
@@ -46,6 +57,6 @@ export function filterByDepartureWindow<
     if (!Number.isFinite(hh) || !Number.isFinite(mm)) return false;
     let depMin = hh * 60 + mm + (t.delayMinutes || 0);
     if (baseMin > 1200 && depMin < 180) depMin += 1440;
-    return depMin >= baseMin && depMin <= baseMin + 30;
+    return depMin >= baseMin && depMin <= baseMin + 60;
   });
 }
