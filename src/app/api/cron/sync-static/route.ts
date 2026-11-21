@@ -20,6 +20,8 @@ export async function GET(req: NextRequest) {
 
   try {
     const group = req.nextUrl.searchParams.get('group') || 'all';
+    const batchRaw = Number(req.nextUrl.searchParams.get('batch'));
+    const batch = batchRaw === 1 || batchRaw === 2 ? batchRaw : undefined;
     const [rail, metro, opendata, tdxBike, tdxParking] = await Promise.all([
       group === 'all' || group === 'rail'
         ? syncRailStaticToDb()
@@ -31,10 +33,10 @@ export async function GET(req: NextRequest) {
         ? syncOpenDataStaticToDb()
         : Promise.resolve({}),
       group === 'all' || group === 'tdx_bike'
-        ? syncTdxBikeStaticToDb()
+        ? syncTdxBikeStaticToDb(batch)
         : Promise.resolve({}),
       group === 'all' || group === 'tdx_parking'
-        ? syncTdxParkingStaticToDb()
+        ? syncTdxParkingStaticToDb(batch)
         : Promise.resolve({}),
     ]);
     const status = await getStaticSyncStatus();

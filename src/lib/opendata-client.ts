@@ -712,11 +712,14 @@ interface TdxBikeAvailRaw {
   UpdateTime?: string;
 }
 
-const TDX_POI_CITIES: Array<{ code: string; label: string }> = [
+const TDX_POI_BATCH_1: Array<{ code: string; label: string }> = [
   { code: 'Taoyuan', label: '桃園' },
   { code: 'Hsinchu', label: '新竹' },
   { code: 'HsinchuCounty', label: '新竹縣' },
   { code: 'MiaoliCounty', label: '苗栗' },
+];
+
+const TDX_POI_BATCH_2: Array<{ code: string; label: string }> = [
   { code: 'Taichung', label: '台中' },
   { code: 'Chiayi', label: '嘉義' },
   { code: 'Tainan', label: '台南' },
@@ -733,38 +736,37 @@ async function getTdxBikeStations(forceRefresh = false): Promise<YouBikeStation[
     if (hit && hit.expiresAt > now) return hit.data;
 
     if (isDbConfigured()) {
-      const dbList = await getRailSnapshotFromDb<YouBikeStation[]>(
-        'youbike:tdx:stations',
-        getTaipeiDateStr()
-      );
-      if (Array.isArray(dbList) && dbList.length > 0) {
-        cache.set(cacheKey, { data: dbList, expiresAt: now + 3600 * 1000 });
-        return dbList;
+      const [b1, b2] = await Promise.all([
+        getRailSnapshotFromDb<YouBikeStation[]>('youbike:tdx:b1', getTaipeiDateStr()),
+        getRailSnapshotFromDb<YouBikeStation[]>('youbike:tdx:b2', getTaipeiDateStr()),
+      ]);
+      const combined = [...(b1 || []), ...(b2 || [])];
+      if (combined.length > 0) {
+        cache.set(cacheKey, { data: combined, expiresAt: now + 3600 * 1000 });
+        return combined;
       }
     }
-  } else {
-    cache.delete(cacheKey);
   }
+  return [];
+}
 
-  // 非排程同步時若 DB 尚未建好，避免一次打 9 支 TDX 拖慢使用端請求；僅由排程建立
-  if (!forceRefresh && isDbConfigured()) {
-    return [];
-  }
-
-  const all: YouBikeStation[] = [];
-  for (let i = 0; i < TDX_POI_CITIES.length; i++) {
-    const c = TDX_POI_CITIES[i];
-    if (i > 0) await new Promise((r) => setTimeout(r, 250));
+async function syncTdxBikeBatch(batch: 1 | 2): Promise<number> {
+  if (!isTdxConfigured()) return 0;
+  const cities = batch === 1 ? TDX_POI_BATCH_1 : TDX_POI_BATCH_2;
+  const out: YouBikeStation[] = [];
+  for (let i = 0; i < cities.length; i++) {
+    const c = cities[i];
+    if (i > 0) await new Promise((r) => setTimeout(r, 1100));
     const raw = await fetchTdx<TdxBikeStationRaw[]>(
       `/v2/Bike/Station/City/${c.code}?%24format=JSON`,
-      forceRefresh ? 0 : 3600
+      0
     ).catch(() => [] as TdxBikeStationRaw[]);
 
     for (const st of Array.isArray(raw) ? raw : []) {
       const lat = Number(st.StationPosition?.PositionLat);
       const lng = Number(st.StationPosition?.PositionLon);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      all.push({
+      out.push({
         stationUid: st.StationUID,
         stationName: (st.StationName?.Zh_tw || st.StationUID).replace(/^YouBike2\.0_/, ''),
         city: c.code,
@@ -781,19 +783,17 @@ async function getTdxBikeStations(forceRefresh = false): Promise<YouBikeStation[
     }
   }
 
-  if (all.length > 0) {
-    cache.set(cacheKey, { data: all, expiresAt: now + 3600 * 1000 });
-    if (isDbConfigured()) {
-      await saveRailSnapshotToDb(
-        'youbike:tdx:stations',
-        'youbike_tdx_stations',
-        getTaipeiDateStr(),
-        all,
-        all.length
-      ).catch(() => {});
-    }
+  cache.delete('tdx-youbike-static');
+  if (out.length > 0 && isDbConfigured()) {
+    await saveRailSnapshotToDb(
+      `youbike:tdx:b${batch}`,
+      `youbike_tdx_b${batch}`,
+      getTaipeiDateStr(),
+      out,
+      out.length
+    );
   }
-  return all;
+  return out.length;
 }
 
 async function enrichTdxBikeAvailability(
@@ -1179,37 +1179,37 @@ async function getTdxParkingLots(forceRefresh = false): Promise<ParkingLot[]> {
     if (hit && hit.expiresAt > now) return hit.data;
 
     if (isDbConfigured()) {
-      const dbList = await getRailSnapshotFromDb<ParkingLot[]>(
-        'parking:tdx:desc',
-        getTaipeiDateStr()
-      );
-      if (Array.isArray(dbList) && dbList.length > 0) {
-        cache.set(cacheKey, { data: dbList, expiresAt: now + 3600 * 1000 });
-        return dbList;
+      const [b1, b2] = await Promise.all([
+        getRailSnapshotFromDb<ParkingLot[]>('parking:tdx:b1', getTaipeiDateStr()),
+        getRailSnapshotFromDb<ParkingLot[]>('parking:tdx:b2', getTaipeiDateStr()),
+      ]);
+      const combined = [...(b1 || []), ...(b2 || [])];
+      if (combined.length > 0) {
+        cache.set(cacheKey, { data: combined, expiresAt: now + 3600 * 1000 });
+        return combined;
       }
     }
-  } else {
-    cache.delete(cacheKey);
   }
+  return [];
+}
 
-  if (!forceRefresh && isDbConfigured()) {
-    return [];
-  }
-
-  const all: ParkingLot[] = [];
-  for (let i = 0; i < TDX_POI_CITIES.length; i++) {
-    const c = TDX_POI_CITIES[i];
-    if (i > 0) await new Promise((r) => setTimeout(r, 250));
+async function syncTdxParkingBatch(batch: 1 | 2): Promise<number> {
+  if (!isTdxConfigured()) return 0;
+  const cities = batch === 1 ? TDX_POI_BATCH_1 : TDX_POI_BATCH_2;
+  const out: ParkingLot[] = [];
+  for (let i = 0; i < cities.length; i++) {
+    const c = cities[i];
+    if (i > 0) await new Promise((r) => setTimeout(r, 1100));
     const raw = await fetchTdx<TdxCarParkRaw[] | { CarParks?: TdxCarParkRaw[] }>(
       `/v1/Parking/OffStreet/CarPark/City/${c.code}?%24format=JSON`,
-      forceRefresh ? 0 : 3600
+      0
     ).catch(() => [] as TdxCarParkRaw[]);
     const list = Array.isArray(raw) ? raw : raw?.CarParks || [];
     for (const p of list) {
       const lat = Number(p.CarParkPosition?.PositionLat);
       const lng = Number(p.CarParkPosition?.PositionLon);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      all.push({
+      out.push({
         carParkId: `TDX-${c.code}-${p.CarParkID}`,
         name: p.CarParkName?.Zh_tw || p.CarParkID,
         city: c.code,
@@ -1225,33 +1225,39 @@ async function getTdxParkingLots(forceRefresh = false): Promise<ParkingLot[]> {
     }
   }
 
-  if (all.length > 0) {
-    cache.set(cacheKey, { data: all, expiresAt: now + 3600 * 1000 });
-    if (isDbConfigured()) {
-      await saveRailSnapshotToDb(
-        'parking:tdx:desc',
-        'parking_tdx_desc',
-        getTaipeiDateStr(),
-        all,
-        all.length
-      ).catch(() => {});
-    }
+  cache.delete('tdx-parking-static');
+  if (out.length > 0 && isDbConfigured()) {
+    await saveRailSnapshotToDb(
+      `parking:tdx:b${batch}`,
+      `parking_tdx_b${batch}`,
+      getTaipeiDateStr(),
+      out,
+      out.length
+    );
   }
-  return all;
+  return out.length;
 }
 
-export async function syncTdxBikeStaticToDb(): Promise<{
+export async function syncTdxBikeStaticToDb(batch?: 1 | 2): Promise<{
   tdxBikeStations: number;
 }> {
-  const tdxBikes = await getTdxBikeStations(true).catch(() => [] as YouBikeStation[]);
-  return { tdxBikeStations: tdxBikes.length };
+  if (batch === 1 || batch === 2) {
+    return { tdxBikeStations: await syncTdxBikeBatch(batch) };
+  }
+  const b1 = await syncTdxBikeBatch(1);
+  const b2 = await syncTdxBikeBatch(2);
+  return { tdxBikeStations: b1 + b2 };
 }
 
-export async function syncTdxParkingStaticToDb(): Promise<{
+export async function syncTdxParkingStaticToDb(batch?: 1 | 2): Promise<{
   tdxParking: number;
 }> {
-  const tdxParking = await getTdxParkingLots(true).catch(() => [] as ParkingLot[]);
-  return { tdxParking: tdxParking.length };
+  if (batch === 1 || batch === 2) {
+    return { tdxParking: await syncTdxParkingBatch(batch) };
+  }
+  const b1 = await syncTdxParkingBatch(1);
+  const b2 = await syncTdxParkingBatch(2);
+  return { tdxParking: b1 + b2 };
 }
 
 export async function syncTdxPoiStaticToDb(): Promise<{

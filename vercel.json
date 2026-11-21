@@ -13,12 +13,20 @@
       "schedule": "35 20 * * *"
     },
     {
-      "path": "/api/cron/sync-static?group=tdx_bike",
+      "path": "/api/cron/sync-static?group=tdx_bike&batch=1",
       "schedule": "38 20 * * *"
     },
     {
-      "path": "/api/cron/sync-static?group=tdx_parking",
+      "path": "/api/cron/sync-static?group=tdx_bike&batch=2",
       "schedule": "40 20 * * *"
+    },
+    {
+      "path": "/api/cron/sync-static?group=tdx_parking&batch=1",
+      "schedule": "42 20 * * *"
+    },
+    {
+      "path": "/api/cron/sync-static?group=tdx_parking&batch=2",
+      "schedule": "44 20 * * *"
     }
   ]
 }
