@@ -1,3 +1,11 @@
+import {
+  getRailSnapshotFromDb,
+  getTraStationFromDb,
+  getTraTrainsFromDb,
+  isDbConfigured,
+  saveRailSnapshotToDb,
+  saveTraDailyToDb,
+} from './db';
 import { METRO_SYSTEMS } from './mock-data';
 import { getMetroStationCoord, getThsrStationCoord, getTraStationCoord } from './rail-geo';
 import { fetchTdx, isTdxConfigured } from './tdx-client';
@@ -694,6 +702,10 @@ interface CompactTraBoardStop {
   departureTime: string;
   arrivalTime: string;
   remainingStops: { stationId: string; arrivalTime: string }[];
+  note?: string;
+  wheelchairFlag?: boolean;
+  bikeFlag?: boolean;
+  breastFeedingFlag?: boolean;
 }
 
 interface CompactTraTrain {
@@ -809,6 +821,10 @@ async function getTraDailyIndex(dateStr: string): Promise<TraDailyIndex | null> 
             departureTime: s.departureTime,
             arrivalTime: s.arrivalTime,
             remainingStops: remaining,
+            note: trainEntry.note,
+            wheelchairFlag: trainEntry.wheelchairFlag,
+            bikeFlag: trainEntry.bikeFlag,
+            breastFeedingFlag: trainEntry.breastFeedingFlag,
           });
         }
       }
@@ -817,13 +833,17 @@ async function getTraDailyIndex(dateStr: string): Promise<TraDailyIndex | null> 
         arrList.sort((a, b) => a.departureTime.localeCompare(b.departureTime));
       }
 
+      const effectiveDate = res?.TrainDate || dateStr;
       traDailyIndexCache = {
-        dateStr: res?.TrainDate || dateStr,
+        dateStr: effectiveDate,
         expiresAt: Date.now() + 4 * 60 * 60 * 1000,
         byStation,
         trains,
         trainByNo,
       };
+      if (isDbConfigured()) {
+        void saveTraDailyToDb(dateStr, byStation, trains).catch(() => {});
+      }
       return traDailyIndexCache;
     } catch {
       return traDailyIndexCache;
@@ -880,24 +900,37 @@ export async function getRealTraData(
     };
   }
 
-  // 冷啟動時先取得當日全線時刻表索引，避免與 TrainLiveBoard 併發觸發 TDX 429
-  const dailyIndexValue = await getTraDailyIndex(dateStr);
-  const dailyIndex: PromiseSettledResult<Awaited<ReturnType<typeof getTraDailyIndex>>> = {
-    status: 'fulfilled',
-    value: dailyIndexValue,
-  };
-  const [liveRes] = await Promise.allSettled([
+  // 優先查記憶體快取或 Neon Postgres，僅在兩者皆無當日資料時才向 TDX 抓全線時刻表
+  const hasWarmMemory =
+    traDailyIndexCache &&
+    traDailyIndexCache.dateStr === dateStr &&
+    Date.now() < traDailyIndexCache.expiresAt;
+
+  const [dbBoardRes, liveRes] = await Promise.allSettled([
+    !hasWarmMemory && mode === 'board' && isDbConfigured()
+      ? getTraStationFromDb<CompactTraBoardStop>(dateStr, station)
+      : Promise.resolve(null),
     fetchTdx<{ UpdateTime?: string; SrcUpdateTime?: string; TrainLiveBoards?: TdxTraTrainLive[] }>(
       '/v3/Rail/TRA/TrainLiveBoard?%24format=JSON',
       15
     ),
   ]);
 
+  const dbStationSchedules =
+    dbBoardRes.status === 'fulfilled' && Array.isArray(dbBoardRes.value) && dbBoardRes.value.length > 0
+      ? dbBoardRes.value
+      : null;
+
+  const index = hasWarmMemory
+    ? traDailyIndexCache
+    : dbStationSchedules
+      ? null
+      : await getTraDailyIndex(dateStr);
+
   const liveList =
     liveRes.status === 'fulfilled' && Array.isArray(liveRes.value?.TrainLiveBoards)
       ? liveRes.value.TrainLiveBoards
       : [];
-  const index = dailyIndex.status === 'fulfilled' ? dailyIndex.value : null;
 
   const delayMap = new Map<string, number>();
   const liveLocMap = new Map<string, string>();
@@ -944,7 +977,7 @@ export async function getRealTraData(
   let trains: TraTrainRow[] = [];
 
   if (mode === 'board') {
-    const stationSchedules = index?.byStation.get(station) ?? [];
+    const stationSchedules = dbStationSchedules ?? index?.byStation.get(station) ?? [];
     const pickBound = (bound: 'north' | 'south'): TraTrainRow[] => {
       const chosen = stationSchedules.filter((s) => s.bound === bound);
       return chosen.map((s) => {
@@ -964,10 +997,10 @@ export async function getRealTraData(
           statusText: delay > 0 ? `晚 ${delay} 分` : '準點',
           currentStationId: liveStationIdMap.get(s.trainNo),
           currentLocation: liveLocMap.get(s.trainNo),
-          note: meta?.note,
-          wheelchairFlag: meta?.wheelchairFlag,
-          bikeFlag: meta?.bikeFlag,
-          breastFeedingFlag: meta?.breastFeedingFlag,
+          note: s.note ?? meta?.note,
+          wheelchairFlag: s.wheelchairFlag ?? meta?.wheelchairFlag,
+          bikeFlag: s.bikeFlag ?? meta?.bikeFlag,
+          breastFeedingFlag: s.breastFeedingFlag ?? meta?.breastFeedingFlag,
           remainingStops: s.remainingStops,
         };
       });
@@ -1088,6 +1121,70 @@ function mapSeatCode(code?: 'O' | 'L' | 'X'): 'available' | 'limited' | 'full' {
   return 'available';
 }
 
+let thsrDailyCache: { dateStr: string; expiresAt: number; list: TdxThsrDaily[] } | null = null;
+let thsrDailyInFlight: Promise<TdxThsrDaily[]> | null = null;
+
+async function getThsrDailyTimetable(dateStr: string): Promise<TdxThsrDaily[]> {
+  if (
+    thsrDailyCache &&
+    thsrDailyCache.dateStr === dateStr &&
+    Date.now() < thsrDailyCache.expiresAt
+  ) {
+    return thsrDailyCache.list;
+  }
+
+  if (thsrDailyInFlight) return thsrDailyInFlight;
+
+  thsrDailyInFlight = (async () => {
+    try {
+      if (isDbConfigured()) {
+        const dbList = await getRailSnapshotFromDb<TdxThsrDaily[]>(
+          `thsr:daily:${dateStr}`,
+          dateStr
+        );
+        if (Array.isArray(dbList) && dbList.length > 0) {
+          thsrDailyCache = {
+            dateStr,
+            expiresAt: Date.now() + 4 * 60 * 60 * 1000,
+            list: dbList,
+          };
+          return dbList;
+        }
+      }
+
+      const daily = await fetchTdx<TdxThsrDaily[]>(
+        '/v2/Rail/THSR/DailyTimetable/Today?%24format=JSON',
+        3600,
+        true
+      );
+      const list = Array.isArray(daily) ? daily : [];
+      if (list.length > 0) {
+        thsrDailyCache = {
+          dateStr,
+          expiresAt: Date.now() + 4 * 60 * 60 * 1000,
+          list,
+        };
+        if (isDbConfigured()) {
+          void saveRailSnapshotToDb(
+            `thsr:daily:${dateStr}`,
+            'thsr_daily',
+            dateStr,
+            list,
+            list.length
+          ).catch(() => {});
+        }
+      }
+      return list;
+    } catch {
+      return thsrDailyCache?.list || [];
+    } finally {
+      thsrDailyInFlight = null;
+    }
+  })();
+
+  return thsrDailyInFlight;
+}
+
 export async function getRealThsrData(
   from: string,
   to?: string
@@ -1111,16 +1208,14 @@ export async function getRealThsrData(
   }
 
   try {
-    // 冷啟動時先取得並快取當日高鐵時刻表（3600s + Vercel Data Cache 跨實例共享），避免與餘位 API 併發觸發 TDX 429
-    const daily = await fetchTdx<TdxThsrDaily[]>(
-      '/v2/Rail/THSR/DailyTimetable/Today?%24format=JSON',
-      3600,
-      true
-    );
-    const seatData = await fetchTdx<TdxThsrSeatList>(
-      `/v2/Rail/THSR/AvailableSeatStatusList/${encodeURIComponent(from)}?%24format=JSON`,
-      60
-    ).catch(() => ({ AvailableSeats: [] }));
+    const { dateStr } = getTaipeiNow();
+    const [daily, seatData] = await Promise.all([
+      getThsrDailyTimetable(dateStr),
+      fetchTdx<TdxThsrSeatList>(
+        `/v2/Rail/THSR/AvailableSeatStatusList/${encodeURIComponent(from)}?%24format=JSON`,
+        60
+      ).catch(() => ({ AvailableSeats: [] })),
+    ]);
 
     const seatByTrainStop = new Map<
       string,
@@ -1349,12 +1444,9 @@ export async function getThsrTrainsStops(
   const uniqueNos = Array.from(new Set(trainNos.map((n) => n.trim()).filter(Boolean)));
   if (!isTdxConfigured() || uniqueNos.length === 0) return {};
   try {
+    const { dateStr } = getTaipeiNow();
     const [daily, seatData] = await Promise.all([
-      fetchTdx<TdxThsrDaily[]>(
-        '/v2/Rail/THSR/DailyTimetable/Today?%24format=JSON',
-        3600,
-        true
-      ),
+      getThsrDailyTimetable(dateStr),
       fetchTdx<TdxThsrSeatList>(
         `/v2/Rail/THSR/AvailableSeatStatusList/${encodeURIComponent(from)}?%24format=JSON`,
         60
@@ -1385,17 +1477,15 @@ export async function getThsrTrainsStops(
 }
 
 /**
- * 依車次編號取得單一台鐵列車完整停靠站時刻表（直接讀取已快取之當日索引）
+ * 依車次編號取得單一台鐵列車完整停靠站時刻表（記憶體 -> Postgres -> TDX）
  */
 export async function getTraTrainStops(trainNo: string): Promise<TraStopTime[]> {
-  if (!isTdxConfigured()) return [];
-  const { dateStr } = getTaipeiNow();
-  const index = await getTraDailyIndex(dateStr);
-  return index?.trainByNo.get(trainNo)?.stops || [];
+  const batch = await getTraTrainsStops([trainNo]);
+  return batch[trainNo] || [];
 }
 
 /**
- * 批次取得多班台鐵列車完整停靠站時刻表（直接讀取已快取之當日索引）
+ * 批次取得多班台鐵列車完整停靠站時刻表（優先讀記憶體或 Neon Postgres）
  */
 export async function getTraTrainsStops(
   trainNos: string[]
@@ -1403,6 +1493,33 @@ export async function getTraTrainsStops(
   const uniqueNos = Array.from(new Set(trainNos.map((n) => n.trim()).filter(Boolean)));
   if (!isTdxConfigured() || uniqueNos.length === 0) return {};
   const { dateStr } = getTaipeiNow();
+
+  if (
+    traDailyIndexCache &&
+    traDailyIndexCache.dateStr === dateStr &&
+    Date.now() < traDailyIndexCache.expiresAt
+  ) {
+    const fromMem: Record<string, TraStopTime[]> = {};
+    for (const no of uniqueNos) {
+      const stops = traDailyIndexCache.trainByNo.get(no)?.stops;
+      if (stops && stops.length > 0) fromMem[no] = stops;
+    }
+    return fromMem;
+  }
+
+  if (isDbConfigured()) {
+    const dbMap = await getTraTrainsFromDb<CompactTraTrain>(dateStr, uniqueNos);
+    if (Object.keys(dbMap).length > 0) {
+      const fromDb: Record<string, TraStopTime[]> = {};
+      for (const [no, meta] of Object.entries(dbMap)) {
+        if (meta?.stops && meta.stops.length > 0) {
+          fromDb[no] = meta.stops;
+        }
+      }
+      if (Object.keys(fromDb).length > 0) return fromDb;
+    }
+  }
+
   const index = await getTraDailyIndex(dateStr);
   if (!index) return {};
 
@@ -1568,4 +1685,59 @@ export async function getRealThsrLive(from: string): Promise<{
       source: 'tdx',
     };
   }
+}
+
+/**
+ * 每日靜態時刻表同步作業（供 Vercel Cron 每天凌晨呼叫一次，直接持久化至 Neon Postgres）
+ */
+export async function syncDailyStaticToDb(): Promise<{
+  dateStr: string;
+  dbConfigured: boolean;
+  traStations: number;
+  traTrains: number;
+  thsrTrains: number;
+}> {
+  const { dateStr } = getTaipeiNow();
+  if (!isTdxConfigured()) {
+    return {
+      dateStr,
+      dbConfigured: isDbConfigured(),
+      traStations: 0,
+      traTrains: 0,
+      thsrTrains: 0,
+    };
+  }
+
+  // 清除實例記憶強迫向 TDX 重新拉取今日最新靜態時刻表並寫入 Postgres
+  traDailyIndexCache = null;
+  thsrDailyCache = null;
+
+  const traIndex = await getTraDailyIndex(dateStr);
+  if (traIndex && isDbConfigured()) {
+    await saveTraDailyToDb(dateStr, traIndex.byStation, traIndex.trains);
+  }
+
+  const thsrRes = await fetchTdx<TdxThsrDaily[]>(
+    '/v2/Rail/THSR/DailyTimetable/Today?%24format=JSON',
+    0,
+    true
+  );
+  const thsrList = Array.isArray(thsrRes) ? thsrRes : [];
+  if (thsrList.length > 0 && isDbConfigured()) {
+    await saveRailSnapshotToDb(
+      `thsr:daily:${dateStr}`,
+      'thsr_daily',
+      dateStr,
+      thsrList,
+      thsrList.length
+    );
+  }
+
+  return {
+    dateStr,
+    dbConfigured: isDbConfigured(),
+    traStations: traIndex?.byStation.size || 0,
+    traTrains: traIndex?.trains.length || 0,
+    thsrTrains: thsrList.length,
+  };
 }
