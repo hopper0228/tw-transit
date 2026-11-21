@@ -451,23 +451,31 @@ function TraPageInner() {
                 <ul className="divide-y divide-slate-100 dark:divide-slate-800">
                   {list.map((t) => {
                     const [hh, mm] = t.departureTime.split(':').map(Number);
-                    const estMin =
+                    let estMin =
                       Number.isFinite(hh) && Number.isFinite(mm)
                         ? hh * 60 + mm + (t.delayMinutes || 0)
                         : null;
-                    let diffMin =
+                    if (estMin !== null && nowMin !== null && hh < 3 && nowMin > 1200) {
+                      estMin += 1440;
+                    }
+                    const diffMin =
                       estMin !== null && nowMin !== null
                         ? Math.round(estMin - nowMin)
                         : null;
-                    if (diffMin !== null && diffMin < -720) diffMin += 1440;
+                    const isDeparted =
+                      (diffMin !== null && diffMin < 0) ||
+                      (t.currentStationId === station &&
+                        Boolean(t.currentLocation?.includes('發車') || t.currentLocation?.includes('離站')));
                     const etaLabel =
-                      diffMin === null
-                        ? ''
-                        : diffMin <= 0
-                          ? ' · 即將/已發車'
-                          : diffMin <= 60
-                            ? ` · 約 ${diffMin} 分後`
-                            : '';
+                      isDeparted
+                        ? ' · 已發車'
+                        : diffMin === null
+                          ? ''
+                          : diffMin === 0
+                            ? ' · 即將發車'
+                            : diffMin <= 60
+                              ? ` · 約 ${diffMin} 分後`
+                              : '';
                     const targetStopInfo = targetStation
                       ? t.remainingStops?.find((s) => s.stationId === targetStation)
                       : undefined;
@@ -478,36 +486,62 @@ function TraPageInner() {
                       <button
                         type="button"
                         onClick={() => setSelectedTrain(t)}
-                        className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors duration-150 hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]"
+                        className={`flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors duration-150 ${
+                          isDeparted
+                            ? 'bg-slate-100/80 text-slate-400 hover:bg-slate-100 dark:bg-slate-800/40 dark:text-slate-500 dark:hover:bg-slate-800/60'
+                            : 'hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]'
+                        }`}
                       >
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-3.5 min-w-0">
                           <span
-                            className={`rounded-md px-2 py-0.5 text-xs font-bold ${getTrainTypeBadge(
-                              t.trainType
-                            )}`}
+                            className={`w-14 shrink-0 font-mono text-xl font-medium tabular-nums ${
+                              isDeparted
+                                ? 'text-slate-400 line-through dark:text-slate-500'
+                                : 'text-[#111827] dark:text-[#eef0f5]'
+                            }`}
                           >
-                            {t.trainType}
+                            {t.departureTime}
                           </span>
-                          <div>
-                            <div className="text-sm font-medium text-[#111827] dark:text-[#eef0f5]">
-                              {t.trainNo} 次 · 往 {t.destinationStation}
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-bold ${getTrainTypeBadge(
+                                  t.trainType
+                                )} ${isDeparted ? 'opacity-50' : ''}`}
+                              >
+                                {t.trainType}
+                              </span>
+                              <span
+                                className={`truncate text-sm font-medium ${
+                                  isDeparted
+                                    ? 'text-slate-400 dark:text-slate-500'
+                                    : 'text-[#111827] dark:text-[#eef0f5]'
+                                }`}
+                              >
+                                {t.trainNo} · 往 {t.destinationStation}
+                              </span>
                             </div>
-                            <div className="font-mono text-xs text-[#6b7487] dark:text-[#7a8296]">
-                              表定 {t.departureTime} 開車
-                              {targetStopInfo ? ` → 抵達 ${targetStationName} ${targetStopInfo.arrivalTime}` : ''}
+                            <div className="mt-0.5 truncate font-mono text-xs text-[#6b7487] dark:text-[#7a8296]">
+                              {targetStopInfo
+                                ? `抵達 ${targetStationName} ${targetStopInfo.arrivalTime}`
+                                : t.originStation
+                                  ? `${t.originStation}開`
+                                  : ''}
                               {etaLabel}
                             </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex shrink-0 items-center gap-2">
                           <span
                             className={`rounded-md px-2 py-0.5 text-xs font-medium ${
-                              t.delayMinutes > 0
-                                ? 'bg-red-50 text-red-600 dark:bg-red-950/60 dark:text-red-400'
-                                : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'
+                              isDeparted
+                                ? 'bg-slate-200/80 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                                : t.delayMinutes > 0
+                                  ? 'bg-red-50 text-red-600 dark:bg-red-950/60 dark:text-red-400'
+                                  : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'
                             }`}
                           >
-                            {t.statusText}
+                            {isDeparted ? '已發車' : t.statusText}
                           </span>
                           <ChevronRight className="h-4 w-4 text-[#6b7487] dark:text-[#7a8296]" strokeWidth={1.5} />
                         </div>

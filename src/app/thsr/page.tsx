@@ -436,19 +436,26 @@ function ThsrPageInner() {
                         nowDate.getSeconds() / 60
                       : null;
                     const [hh, mm] = t.departureTime.split(':').map(Number);
-                    let diffMin =
-                      nowMin !== null && Number.isFinite(hh) && Number.isFinite(mm)
-                        ? Math.round(hh * 60 + mm - nowMin)
+                    let depMin =
+                      Number.isFinite(hh) && Number.isFinite(mm) ? hh * 60 + mm : null;
+                    if (depMin !== null && nowMin !== null && hh < 3 && nowMin > 1200) {
+                      depMin += 1440;
+                    }
+                    const diffMin =
+                      depMin !== null && nowMin !== null
+                        ? Math.round(depMin - nowMin)
                         : null;
-                    if (diffMin !== null && diffMin < -720) diffMin += 1440;
+                    const isDeparted = diffMin !== null && diffMin < 0;
                     const etaLabel =
-                      diffMin === null
-                        ? ''
-                        : diffMin <= 0
-                          ? ' · 即將/已發車'
-                          : diffMin <= 60
-                            ? ` · 約 ${diffMin} 分後`
-                            : '';
+                      isDeparted
+                        ? ' · 已發車'
+                        : diffMin === null
+                          ? ''
+                          : diffMin === 0
+                            ? ' · 即將發車'
+                            : diffMin <= 60
+                              ? ` · 約 ${diffMin} 分後`
+                              : '';
 
                     const targetStop = targetStation
                       ? t.remainingStops?.find((s) => s.stationId === targetStation)
@@ -472,41 +479,66 @@ function ThsrPageInner() {
                         <button
                           type="button"
                           onClick={() => setSelectedTrain(t)}
-                          className="flex w-full flex-wrap items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors duration-150 hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]"
+                          className={`flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors duration-150 ${
+                            isDeparted
+                              ? 'bg-slate-100/80 text-slate-400 hover:bg-slate-100 dark:bg-slate-800/40 dark:text-slate-500 dark:hover:bg-slate-800/60'
+                              : 'hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]'
+                          }`}
                         >
-                          <div className="flex items-center gap-3">
-                            <div className="text-center">
-                              <span
-                                className={`block rounded-lg px-2.5 py-1 text-xs font-bold tabular-nums ${col.badgeClass}`}
-                              >
-                                {t.trainNo}
-                              </span>
-                              <span className="mt-1 block text-[11px] font-medium text-slate-500">
-                                {t.stopPattern}
-                              </span>
-                            </div>
+                          <div className="flex items-center gap-3.5 min-w-0">
+                            <span
+                              className={`w-14 shrink-0 font-mono text-xl font-medium tabular-nums ${
+                                isDeparted
+                                  ? 'text-slate-400 line-through dark:text-slate-500'
+                                  : 'text-[#111827] dark:text-[#eef0f5]'
+                              }`}
+                            >
+                              {t.departureTime}
+                            </span>
 
-                            <div>
-                              <div className="text-base font-medium tabular-nums text-[#111827] dark:text-[#eef0f5]">
-                                {t.departureTime} → {displayArrival}
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-bold tabular-nums ${col.badgeClass} ${
+                                    isDeparted ? 'opacity-50' : ''
+                                  }`}
+                                >
+                                  {t.trainNo}
+                                </span>
+                                <span
+                                  className={`truncate text-sm font-medium ${
+                                    isDeparted
+                                      ? 'text-slate-400 dark:text-slate-500'
+                                      : 'text-[#111827] dark:text-[#eef0f5]'
+                                  }`}
+                                >
+                                  {targetStop ? `往 ${displayDest}` : `終點 ${displayDest}`} · {displayArrival} 抵
+                                </span>
                               </div>
-                              <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">
-                                {targetStop ? `抵達 ${displayDest}` : `終點 ${displayDest}`} · 約{' '}
-                                {displayDur} 分 · 自由座 {t.nonReservedCars}
+                              <div className="mt-0.5 truncate font-mono text-xs text-[#6b7487] dark:text-[#7a8296]">
+                                {t.stopPattern} · 約 {displayDur} 分 · 自由座 {t.nonReservedCars}
                                 {etaLabel}
                               </div>
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-3">
-                            <div className="text-center">
-                              <div className="mb-0.5 text-[10px] text-[#6b7487]">標準座</div>
-                              {renderSeatBadge(stdStatus)}
-                            </div>
-                            <div className="text-center">
-                              <div className="mb-0.5 text-[10px] text-[#6b7487]">商務座</div>
-                              {renderSeatBadge(bizStatus)}
-                            </div>
+                          <div className="flex shrink-0 items-center gap-2.5">
+                            {isDeparted ? (
+                              <span className="rounded-md bg-slate-200/80 px-2 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                                已發車
+                              </span>
+                            ) : (
+                              <>
+                                <div className="text-center">
+                                  <div className="mb-0.5 text-[10px] text-[#6b7487]">標準</div>
+                                  {renderSeatBadge(stdStatus)}
+                                </div>
+                                <div className="text-center">
+                                  <div className="mb-0.5 text-[10px] text-[#6b7487]">商務</div>
+                                  {renderSeatBadge(bizStatus)}
+                                </div>
+                              </>
+                            )}
                             <ChevronRight className="h-4 w-4 text-[#6b7487] dark:text-[#7a8296]" strokeWidth={1.5} />
                           </div>
                         </button>
