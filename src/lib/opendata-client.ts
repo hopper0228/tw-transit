@@ -1430,7 +1430,7 @@ async function syncTdxParkingBatch(batch: 1 | 2): Promise<{
 
   for (let i = 0; i < cities.length; i++) {
     const c = cities[i];
-    if (i > 0) await new Promise((r) => setTimeout(r, 1500));
+    if (i > 0) await new Promise((r) => setTimeout(r, 800));
     const raw = await fetchTdx<TdxCarParkRaw[] | { CarParks?: TdxCarParkRaw[] }>(
       `/v1/Parking/OffStreet/CarPark/City/${c.code}?%24format=JSON`,
       0
