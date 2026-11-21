@@ -68,6 +68,42 @@ export async function ensureStaticTables(): Promise<void> {
         PRIMARY KEY (city, route_id)
       )
     `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS parking_lots_static (
+        car_park_id TEXT PRIMARY KEY,
+        city TEXT NOT NULL,
+        name TEXT NOT NULL,
+        address TEXT NOT NULL,
+        lat DOUBLE PRECISION NOT NULL,
+        lng DOUBLE PRECISION NOT NULL,
+        total_spaces INT NOT NULL DEFAULT 0,
+        fare_description TEXT NOT NULL DEFAULT '依現場公告',
+        parking_type TEXT NOT NULL DEFAULT '立體',
+        updated_at_label TEXT NOT NULL DEFAULT '依現場為準',
+        service_date TEXT NOT NULL
+      )
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_parking_lots_lat_lng
+      ON parking_lots_static (lat, lng)
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS youbike_stations_static (
+        station_uid TEXT PRIMARY KEY,
+        city TEXT NOT NULL,
+        station_name TEXT NOT NULL,
+        address TEXT NOT NULL,
+        lat DOUBLE PRECISION NOT NULL,
+        lng DOUBLE PRECISION NOT NULL,
+        total_docks INT NOT NULL DEFAULT 0,
+        service_status INT NOT NULL DEFAULT 1,
+        service_date TEXT NOT NULL
+      )
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_youbike_stations_lat_lng
+      ON youbike_stations_static (lat, lng)
+    `;
   })().catch((err) => {
     tablesReadyPromise = null;
     throw err;
@@ -265,6 +301,267 @@ export async function saveBusRouteStopsToDb(
     ON CONFLICT (dataset_key)
     DO UPDATE SET service_date = EXCLUDED.service_date, record_count = EXCLUDED.record_count, synced_at = NOW()
   `;
+}
+
+export interface SpatialParkingRow {
+  carParkId: string;
+  city: string;
+  name: string;
+  address: string;
+  lat: number;
+  lng: number;
+  totalSpaces: number;
+  fareDescription: string;
+  parkingType: '平面' | '立體' | '地下';
+  updatedAt: string;
+}
+
+export async function upsertParkingLotsToDb(
+  lots: SpatialParkingRow[],
+  serviceDate: string
+): Promise<void> {
+  if (!isDbConfigured() || lots.length === 0) return;
+  await ensureStaticTables();
+  const sql = getSql();
+  const BATCH = 2500;
+  for (let i = 0; i < lots.length; i += BATCH) {
+    const chunk = lots.slice(i, i + BATCH);
+    const ids = chunk.map((l) => l.carParkId);
+    const cities = chunk.map((l) => l.city);
+    const names = chunk.map((l) => l.name);
+    const addrs = chunk.map((l) => l.address);
+    const lats = chunk.map((l) => l.lat);
+    const lngs = chunk.map((l) => l.lng);
+    const totals = chunk.map((l) => Math.max(0, Math.round(l.totalSpaces || 0)));
+    const fares = chunk.map((l) => l.fareDescription || '依現場公告');
+    const types = chunk.map((l) => l.parkingType || '立體');
+    const labels = chunk.map((l) => l.updatedAt || '依現場為準');
+    const dates = chunk.map(() => serviceDate);
+
+    await sql`
+      INSERT INTO parking_lots_static (
+        car_park_id, city, name, address, lat, lng,
+        total_spaces, fare_description, parking_type, updated_at_label, service_date
+      )
+      SELECT id, c, n, a, la, ln, tot, f, tp, lb, d
+      FROM UNNEST(
+        ${ids}::text[], ${cities}::text[], ${names}::text[], ${addrs}::text[],
+        ${lats}::double precision[], ${lngs}::double precision[],
+        ${totals}::int[], ${fares}::text[], ${types}::text[], ${labels}::text[], ${dates}::text[]
+      ) AS t(id, c, n, a, la, ln, tot, f, tp, lb, d)
+      ON CONFLICT (car_park_id) DO UPDATE SET
+        city = EXCLUDED.city,
+        name = EXCLUDED.name,
+        address = EXCLUDED.address,
+        lat = EXCLUDED.lat,
+        lng = EXCLUDED.lng,
+        total_spaces = EXCLUDED.total_spaces,
+        fare_description = EXCLUDED.fare_description,
+        parking_type = EXCLUDED.parking_type,
+        updated_at_label = EXCLUDED.updated_at_label,
+        service_date = EXCLUDED.service_date
+    `;
+  }
+}
+
+export async function queryParkingLotsFromDb(params: {
+  bounds?: { north: number; south: number; east: number; west: number };
+  userPoint?: { lat: number; lng: number };
+  maxDistanceMeters?: number;
+  query?: string;
+  limit: number;
+}): Promise<SpatialParkingRow[] | null> {
+  if (!isDbConfigured()) return null;
+  try {
+    await ensureStaticTables();
+    const sql = getSql();
+
+    let south = -90;
+    let north = 90;
+    let west = -180;
+    let east = 180;
+    let cLat = 25.0468;
+    let cLng = 121.5171;
+
+    if (params.bounds) {
+      south = params.bounds.south;
+      north = params.bounds.north;
+      west = params.bounds.west;
+      east = params.bounds.east;
+      cLat = (north + south) / 2;
+      cLng = (east + west) / 2;
+    } else if (params.userPoint) {
+      cLat = params.userPoint.lat;
+      cLng = params.userPoint.lng;
+      const radiusM = params.maxDistanceMeters || (params.query ? 50000 : 10000);
+      const dLat = (radiusM / 111000) * 1.2;
+      const cosLat = Math.max(0.2, Math.cos((cLat * Math.PI) / 180));
+      const dLng = dLat / cosLat;
+      south = cLat - dLat;
+      north = cLat + dLat;
+      west = cLng - dLng;
+      east = cLng + dLng;
+    }
+
+    const cosLat = Math.max(0.2, Math.cos((cLat * Math.PI) / 180));
+    const qLike = params.query ? `%${params.query}%` : '';
+
+    const rows = (await sql`
+      SELECT
+        car_park_id AS "carParkId",
+        city,
+        name,
+        address,
+        lat,
+        lng,
+        total_spaces AS "totalSpaces",
+        fare_description AS "fareDescription",
+        parking_type AS "parkingType",
+        updated_at_label AS "updatedAt"
+      FROM parking_lots_static
+      WHERE lat BETWEEN ${south} AND ${north}
+        AND lng BETWEEN ${west} AND ${east}
+        AND (${qLike} = '' OR name ILIKE ${qLike} OR address ILIKE ${qLike})
+      ORDER BY ((lat - ${cLat}) * (lat - ${cLat}) + ((lng - ${cLng}) * ${cosLat}) * ((lng - ${cLng}) * ${cosLat})) ASC
+      LIMIT ${Math.max(params.limit, 150)}
+    `) as SpatialParkingRow[];
+
+    if (rows.length === 0 && !params.query && !params.bounds && !params.maxDistanceMeters) {
+      // 若資料表尚未建立資料，回傳 null 觸發既有備援
+      const countRow = (await sql`SELECT 1 FROM parking_lots_static LIMIT 1`) as unknown[];
+      if (countRow.length === 0) return null;
+    }
+
+    return rows;
+  } catch {
+    return null;
+  }
+}
+
+export interface SpatialYouBikeRow {
+  stationUid: string;
+  city: string;
+  stationName: string;
+  address: string;
+  lat: number;
+  lng: number;
+  totalDocks: number;
+  serviceStatus: number;
+}
+
+export async function upsertYouBikeStationsToDb(
+  stations: SpatialYouBikeRow[],
+  serviceDate: string
+): Promise<void> {
+  if (!isDbConfigured() || stations.length === 0) return;
+  await ensureStaticTables();
+  const sql = getSql();
+  const BATCH = 2500;
+  for (let i = 0; i < stations.length; i += BATCH) {
+    const chunk = stations.slice(i, i + BATCH);
+    const uids = chunk.map((s) => s.stationUid);
+    const cities = chunk.map((s) => s.city);
+    const names = chunk.map((s) => s.stationName);
+    const addrs = chunk.map((s) => s.address);
+    const lats = chunk.map((s) => s.lat);
+    const lngs = chunk.map((s) => s.lng);
+    const docks = chunk.map((s) => Math.max(0, Math.round(s.totalDocks || 0)));
+    const statuses = chunk.map((s) => (s.serviceStatus === 1 ? 1 : 0));
+    const dates = chunk.map(() => serviceDate);
+
+    await sql`
+      INSERT INTO youbike_stations_static (
+        station_uid, city, station_name, address, lat, lng,
+        total_docks, service_status, service_date
+      )
+      SELECT u, c, n, a, la, ln, dk, st, d
+      FROM UNNEST(
+        ${uids}::text[], ${cities}::text[], ${names}::text[], ${addrs}::text[],
+        ${lats}::double precision[], ${lngs}::double precision[],
+        ${docks}::int[], ${statuses}::int[], ${dates}::text[]
+      ) AS t(u, c, n, a, la, ln, dk, st, d)
+      ON CONFLICT (station_uid) DO UPDATE SET
+        city = EXCLUDED.city,
+        station_name = EXCLUDED.station_name,
+        address = EXCLUDED.address,
+        lat = EXCLUDED.lat,
+        lng = EXCLUDED.lng,
+        total_docks = EXCLUDED.total_docks,
+        service_status = EXCLUDED.service_status,
+        service_date = EXCLUDED.service_date
+    `;
+  }
+}
+
+export async function queryYouBikeStationsFromDb(params: {
+  bounds?: { north: number; south: number; east: number; west: number };
+  userPoint?: { lat: number; lng: number };
+  maxDistanceMeters?: number;
+  query?: string;
+  limit: number;
+}): Promise<SpatialYouBikeRow[] | null> {
+  if (!isDbConfigured()) return null;
+  try {
+    await ensureStaticTables();
+    const sql = getSql();
+
+    let south = -90;
+    let north = 90;
+    let west = -180;
+    let east = 180;
+    let cLat = 25.0468;
+    let cLng = 121.5171;
+
+    if (params.bounds) {
+      south = params.bounds.south;
+      north = params.bounds.north;
+      west = params.bounds.west;
+      east = params.bounds.east;
+      cLat = (north + south) / 2;
+      cLng = (east + west) / 2;
+    } else if (params.userPoint) {
+      cLat = params.userPoint.lat;
+      cLng = params.userPoint.lng;
+      const radiusM = params.maxDistanceMeters || (params.query ? 50000 : 10000);
+      const dLat = (radiusM / 111000) * 1.2;
+      const cosLat = Math.max(0.2, Math.cos((cLat * Math.PI) / 180));
+      const dLng = dLat / cosLat;
+      south = cLat - dLat;
+      north = cLat + dLat;
+      west = cLng - dLng;
+      east = cLng + dLng;
+    }
+
+    const cosLat = Math.max(0.2, Math.cos((cLat * Math.PI) / 180));
+    const qLike = params.query ? `%${params.query}%` : '';
+
+    const rows = (await sql`
+      SELECT
+        station_uid AS "stationUid",
+        city,
+        station_name AS "stationName",
+        address,
+        lat,
+        lng,
+        total_docks AS "totalDocks",
+        service_status AS "serviceStatus"
+      FROM youbike_stations_static
+      WHERE lat BETWEEN ${south} AND ${north}
+        AND lng BETWEEN ${west} AND ${east}
+        AND (${qLike} = '' OR station_name ILIKE ${qLike} OR address ILIKE ${qLike})
+      ORDER BY ((lat - ${cLat}) * (lat - ${cLat}) + ((lng - ${cLng}) * ${cosLat}) * ((lng - ${cLng}) * ${cosLat})) ASC
+      LIMIT ${Math.max(params.limit, 150)}
+    `) as SpatialYouBikeRow[];
+
+    if (rows.length === 0 && !params.query && !params.bounds && !params.maxDistanceMeters) {
+      const countRow = (await sql`SELECT 1 FROM youbike_stations_static LIMIT 1`) as unknown[];
+      if (countRow.length === 0) return null;
+    }
+
+    return rows;
+  } catch {
+    return null;
+  }
 }
 
 export async function getStaticSyncStatus(): Promise<
