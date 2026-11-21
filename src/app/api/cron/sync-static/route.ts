@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStaticSyncStatus } from '@/lib/db';
-import { syncOpenDataStaticToDb, syncTdxPoiStaticToDb } from '@/lib/opendata-client';
+import {
+  syncOpenDataStaticToDb,
+  syncTdxBikeStaticToDb,
+  syncTdxParkingStaticToDb,
+} from '@/lib/opendata-client';
 import { syncMetroStaticToDb, syncRailStaticToDb } from '@/lib/rail-live';
 
 export const maxDuration = 60;
@@ -16,7 +20,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const group = req.nextUrl.searchParams.get('group') || 'all';
-    const [rail, metro, opendata, tdxPoi] = await Promise.all([
+    const [rail, metro, opendata, tdxBike, tdxParking] = await Promise.all([
       group === 'all' || group === 'rail'
         ? syncRailStaticToDb()
         : Promise.resolve({}),
@@ -26,13 +30,21 @@ export async function GET(req: NextRequest) {
       group === 'all' || group === 'opendata'
         ? syncOpenDataStaticToDb()
         : Promise.resolve({}),
-      group === 'all' || group === 'tdx_poi'
-        ? syncTdxPoiStaticToDb()
+      group === 'all' || group === 'tdx_bike'
+        ? syncTdxBikeStaticToDb()
+        : Promise.resolve({}),
+      group === 'all' || group === 'tdx_parking'
+        ? syncTdxParkingStaticToDb()
         : Promise.resolve({}),
     ]);
     const status = await getStaticSyncStatus();
     return NextResponse.json(
-      { ok: true, group, summary: { ...rail, ...metro, ...opendata, ...tdxPoi }, status },
+      {
+        ok: true,
+        group,
+        summary: { ...rail, ...metro, ...opendata, ...tdxBike, ...tdxParking },
+        status,
+      },
       { headers: { 'Cache-Control': 'no-store, max-age=0' } }
     );
   } catch (err) {

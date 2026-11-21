@@ -1240,18 +1240,27 @@ async function getTdxParkingLots(forceRefresh = false): Promise<ParkingLot[]> {
   return all;
 }
 
+export async function syncTdxBikeStaticToDb(): Promise<{
+  tdxBikeStations: number;
+}> {
+  const tdxBikes = await getTdxBikeStations(true).catch(() => [] as YouBikeStation[]);
+  return { tdxBikeStations: tdxBikes.length };
+}
+
+export async function syncTdxParkingStaticToDb(): Promise<{
+  tdxParking: number;
+}> {
+  const tdxParking = await getTdxParkingLots(true).catch(() => [] as ParkingLot[]);
+  return { tdxParking: tdxParking.length };
+}
+
 export async function syncTdxPoiStaticToDb(): Promise<{
   tdxBikeStations: number;
   tdxParking: number;
 }> {
-  const [tdxBikes, tdxParking] = await Promise.all([
-    getTdxBikeStations(true).catch(() => [] as YouBikeStation[]),
-    getTdxParkingLots(true).catch(() => [] as ParkingLot[]),
-  ]);
-  return {
-    tdxBikeStations: tdxBikes.length,
-    tdxParking: tdxParking.length,
-  };
+  const { tdxBikeStations } = await syncTdxBikeStaticToDb();
+  const { tdxParking } = await syncTdxParkingStaticToDb();
+  return { tdxBikeStations, tdxParking };
 }
 
 export async function syncOpenDataStaticToDb(): Promise<{
