@@ -868,11 +868,13 @@ async function enrichTdxBikeAvailability(
     if (!a) return s;
     const general = a.AvailableRentBikesDetail?.GeneralBikes ?? a.AvailableRentBikes ?? 0;
     const elec = a.AvailableRentBikesDetail?.ElectricBikes ?? 0;
+    const ret = a.AvailableReturnBikes ?? 0;
     return {
       ...s,
+      totalDocks: s.totalDocks > 0 ? s.totalDocks : general + elec + ret,
       availableBikes20: general,
       availableBikes20E: elec,
-      availableReturnDocks: a.AvailableReturnBikes ?? 0,
+      availableReturnDocks: ret,
       serviceStatus: a.ServiceStatus === 1 ? 1 : 0,
       updatedAt: a.UpdateTime ? a.UpdateTime.slice(11, 19) : '即時',
     };
@@ -1356,6 +1358,55 @@ export async function syncOpenDataStaticToDb(): Promise<{
   };
 }
 
+interface TdxParkAvailRaw {
+  CarParkID: string;
+  TotalSpaces?: number;
+  AvailableSpaces?: number;
+  DataCollectTime?: string;
+}
+
+async function enrichTdxParkingAvailability(
+  lots: ParkingLot[]
+): Promise<ParkingLot[]> {
+  if (!isTdxConfigured() || lots.length === 0) return lots;
+  const tdxCities = Array.from(
+    new Set(
+      lots
+        .map((l) => l.city)
+        .filter((c) => c !== 'Taipei' && c !== 'NewTaipei')
+    )
+  ).slice(0, 2);
+  if (tdxCities.length === 0) return lots;
+
+  const availMap = new Map<string, TdxParkAvailRaw>();
+  await Promise.all(
+    tdxCities.map(async (city) => {
+      const raw = await fetchTdx<
+        TdxParkAvailRaw[] | { ParkingAvailabilities?: TdxParkAvailRaw[] }
+      >(`/v1/Parking/OffStreet/ParkingAvailability/City/${city}?%24format=JSON`, 15).catch(
+        () => [] as TdxParkAvailRaw[]
+      );
+      const list = Array.isArray(raw) ? raw : raw?.ParkingAvailabilities || [];
+      for (const a of list) {
+        if (a.CarParkID && typeof a.AvailableSpaces === 'number' && a.AvailableSpaces >= 0) {
+          availMap.set(`TDX-${city}-${a.CarParkID}`, a);
+        }
+      }
+    })
+  );
+
+  return lots.map((l) => {
+    const a = availMap.get(l.carParkId);
+    if (!a) return l;
+    return {
+      ...l,
+      totalSpaces: a.TotalSpaces && a.TotalSpaces > 0 ? a.TotalSpaces : l.totalSpaces,
+      availableSpaces: a.AvailableSpaces ?? l.availableSpaces,
+      updatedAt: a.DataCollectTime ? a.DataCollectTime.slice(11, 19) : '即時',
+    };
+  });
+}
+
 export async function getRealParkingLots(
   query?: string,
   onlyAvailable = false,
@@ -1445,7 +1496,36 @@ export async function getRealParkingLots(
       }
       combined.push(p);
     }
+  } else {
+    // 只看有即時空位時，也納入外縣市 TDX 停車場，稍後依即時剩餘車位過濾
+    for (const p of tdxLots) {
+      if (
+        bounds &&
+        (p.lat < bounds.south ||
+          p.lat > bounds.north ||
+          p.lng < bounds.west ||
+          p.lng > bounds.east)
+      ) {
+        continue;
+      }
+      if (
+        q &&
+        !p.name.toLowerCase().includes(q) &&
+        !p.address.toLowerCase().includes(q)
+      ) {
+        continue;
+      }
+      combined.push(p);
+    }
   }
+
+  const finalizeParkingLots = async (items: ParkingLot[]) => {
+    const enriched = await enrichTdxParkingAvailability(items);
+    if (!onlyAvailable) return enriched;
+    return enriched.filter(
+      (l) => l.availableSpaces !== null && l.availableSpaces > 0
+    );
+  };
 
   if (bounds) {
     const centerLat = (bounds.north + bounds.south) / 2;
@@ -1464,7 +1544,8 @@ export async function getRealParkingLots(
           }
         : lot
     );
-    return { lots: sliced, total: combined.length };
+    const lots = await finalizeParkingLots(sliced);
+    return { lots, total: combined.length };
   }
 
   if (userPoint) {
@@ -1496,8 +1577,9 @@ export async function getRealParkingLots(
       ? sliced.filter((l) => (l.distanceMeters ?? 0) <= maxDistanceMeters)
       : sliced;
 
-    return { lots: finalLots, total: scored.length };
+    const lots = await finalizeParkingLots(finalLots);
+    return { lots, total: scored.length };
   }
 
-  return { lots: combined.slice(0, limit), total: combined.length };
+  return { lots: await finalizeParkingLots(combined.slice(0, limit)), total: combined.length };
 }
