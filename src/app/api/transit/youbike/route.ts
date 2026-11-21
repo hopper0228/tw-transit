@@ -57,7 +57,7 @@ export async function GET(req: NextRequest) {
       bounds,
       userPoint,
       maxDistance,
-      50
+      bounds ? 120 : 50
     );
     return NextResponse.json(
       {

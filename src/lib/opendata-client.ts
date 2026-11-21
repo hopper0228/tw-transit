@@ -774,6 +774,26 @@ export async function getRealYouBikeStations(
     return true;
   });
 
+  if (bounds) {
+    const centerLat = (bounds.north + bounds.south) / 2;
+    const centerLng = (bounds.east + bounds.west) / 2;
+    const cosLat = Math.cos((centerLat * Math.PI) / 180);
+    filtered.sort((a, b) => {
+      const da = (a.lat - centerLat) ** 2 + ((a.lng - centerLng) * cosLat) ** 2;
+      const db = (b.lat - centerLat) ** 2 + ((b.lng - centerLng) * cosLat) ** 2;
+      return da - db;
+    });
+    const sliced = filtered.slice(0, limit).map((s) =>
+      userPoint
+        ? {
+            ...s,
+            distanceMeters: calcDistanceMeters(userPoint.lat, userPoint.lng, s.lat, s.lng),
+          }
+        : s
+    );
+    return { stations: sliced, total: filtered.length };
+  }
+
   if (userPoint) {
     const cosLat = Math.cos((userPoint.lat * Math.PI) / 180);
     // 約略半徑過濾 (1 度緯度 ≈ 111km)
@@ -800,17 +820,6 @@ export async function getRealYouBikeStations(
       : sliced;
 
     return { stations: finalStations, total: scored.length };
-  }
-
-  if (bounds) {
-    const centerLat = (bounds.north + bounds.south) / 2;
-    const centerLng = (bounds.east + bounds.west) / 2;
-    filtered.sort(
-      (a, b) =>
-        (a.lat - centerLat) ** 2 +
-        (a.lng - centerLng) ** 2 -
-        ((b.lat - centerLat) ** 2 + (b.lng - centerLng) ** 2)
-    );
   }
 
   return { stations: filtered.slice(0, limit), total: filtered.length };
@@ -1106,6 +1115,26 @@ export async function getRealParkingLots(
     }
   }
 
+  if (bounds) {
+    const centerLat = (bounds.north + bounds.south) / 2;
+    const centerLng = (bounds.east + bounds.west) / 2;
+    const cosLat = Math.cos((centerLat * Math.PI) / 180);
+    combined.sort((a, b) => {
+      const da = (a.lat - centerLat) ** 2 + ((a.lng - centerLng) * cosLat) ** 2;
+      const db = (b.lat - centerLat) ** 2 + ((b.lng - centerLng) * cosLat) ** 2;
+      return da - db;
+    });
+    const sliced = combined.slice(0, limit).map((lot) =>
+      userPoint
+        ? {
+            ...lot,
+            distanceMeters: calcDistanceMeters(userPoint.lat, userPoint.lng, lot.lat, lot.lng),
+          }
+        : lot
+    );
+    return { lots: sliced, total: combined.length };
+  }
+
   if (userPoint) {
     const cosLat = Math.cos((userPoint.lat * Math.PI) / 180);
     const maxDegSq = maxDistanceMeters
@@ -1136,17 +1165,6 @@ export async function getRealParkingLots(
       : sliced;
 
     return { lots: finalLots, total: scored.length };
-  }
-
-  if (bounds) {
-    const centerLat = (bounds.north + bounds.south) / 2;
-    const centerLng = (bounds.east + bounds.west) / 2;
-    combined.sort(
-      (a, b) =>
-        (a.lat - centerLat) ** 2 +
-        (a.lng - centerLng) ** 2 -
-        ((b.lat - centerLat) ** 2 + (b.lng - centerLng) ** 2)
-    );
   }
 
   return { lots: combined.slice(0, limit), total: combined.length };

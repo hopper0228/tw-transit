@@ -38,6 +38,20 @@ export function useUserLocation() {
   const [status, setStatus] = useState<'idle' | 'locating' | 'granted' | 'denied'>('idle');
   const [ready, setReady] = useState(false);
 
+  const setManualCoords = useCallback((next: GeoCoords) => {
+    setCoords(next);
+    setStatus('granted');
+    setReady(true);
+    try {
+      sessionStorage.setItem(
+        SESSION_KEY,
+        JSON.stringify({ lat: next.lat, lng: next.lng, ts: Date.now() })
+      );
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const requestLocation = useCallback(() => {
     if (typeof window === 'undefined' || !navigator.geolocation) {
       setStatus('denied');
@@ -52,33 +66,30 @@ export function useUserLocation() {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
         };
-        setCoords(next);
-        setStatus('granted');
-        setReady(true);
-        try {
-          sessionStorage.setItem(SESSION_KEY, JSON.stringify(next));
-        } catch {
-          // ignore
-        }
+        setManualCoords(next);
       },
       () => {
-        setStatus('denied');
+        setStatus((prev) => (prev === 'granted' ? 'granted' : 'denied'));
         setReady(true);
       },
-      { enableHighAccuracy: false, timeout: 3000, maximumAge: 60000 }
+      { enableHighAccuracy: true, timeout: 6000, maximumAge: 10000 }
     );
-  }, []);
+  }, [setManualCoords]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
       try {
         const cached = sessionStorage.getItem(SESSION_KEY);
         if (cached) {
-          const parsed = JSON.parse(cached) as GeoCoords;
+          const parsed = JSON.parse(cached) as GeoCoords & { ts?: number };
           if (Number.isFinite(parsed.lat) && Number.isFinite(parsed.lng)) {
-            setCoords(parsed);
+            setCoords({ lat: parsed.lat, lng: parsed.lng });
             setStatus('granted');
             setReady(true);
+            // 若暫存定位超過 60 秒，背景靜默重新校準一次最新 GPS
+            if (!parsed.ts || Date.now() - parsed.ts > 60_000) {
+              requestLocation();
+            }
             return;
           }
         }
@@ -90,5 +101,5 @@ export function useUserLocation() {
     return () => clearTimeout(timer);
   }, [requestLocation]);
 
-  return { coords, status, ready, refreshLocation: requestLocation };
+  return { coords, status, ready, refreshLocation: requestLocation, setManualCoords };
 }

@@ -30,7 +30,7 @@ const DISTANCE_FILTERS = [
 
 function YouBikePageInner() {
   const searchParams = useSearchParams();
-  const { coords, status: locStatus, refreshLocation } = useUserLocation();
+  const { coords, status: locStatus, refreshLocation, setManualCoords } = useUserLocation();
   const { syncVersion, triggerFrontendRefresh, getCached, fetchWithCache } =
     useTransitStore();
   const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
@@ -237,6 +237,11 @@ function YouBikePageInner() {
             zoom={focusedStation ? 16 : 13}
             markers={markers}
             focusMarkerId={focusedStation?.stationUid || null}
+            userCoords={coords}
+            onUserLocate={(next) => {
+              setFocusedStation(null);
+              setManualCoords(next);
+            }}
             heightClass="h-[500px]"
             onBoundsChange={(b) => setMapBounds(b)}
           />

@@ -37,7 +37,7 @@ const DISTANCE_FILTERS = [
 
 function ParkingPageInner() {
   const searchParams = useSearchParams();
-  const { coords, status: locStatus, refreshLocation } = useUserLocation();
+  const { coords, status: locStatus, refreshLocation, setManualCoords } = useUserLocation();
   const { syncVersion, triggerFrontendRefresh, getCached, fetchWithCache } =
     useTransitStore();
   const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
@@ -284,6 +284,11 @@ function ParkingPageInner() {
             zoom={focusedLot ? 16 : 13}
             markers={markers}
             focusMarkerId={focusedLot?.carParkId || null}
+            userCoords={coords}
+            onUserLocate={(next) => {
+              setFocusedLot(null);
+              setManualCoords(next);
+            }}
             heightClass="h-[500px]"
             onBoundsChange={(b) => setMapBounds(b)}
           />

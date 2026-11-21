@@ -68,6 +68,8 @@ interface LeafletMapProps {
   polylineColor?: string;
   markers?: MapMarker[];
   focusMarkerId?: string | null;
+  userCoords?: { lat: number; lng: number } | null;
+  onUserLocate?: (coords: { lat: number; lng: number }) => void;
   heightClass?: string;
   onBoundsChange?: (bounds: MapBounds) => void;
 }
@@ -79,6 +81,8 @@ export default function LeafletMap({
   polylineColor = '#2563EB',
   markers = [],
   focusMarkerId = null,
+  userCoords = null,
+  onUserLocate,
   heightClass = 'h-[420px]',
   onBoundsChange,
 }: LeafletMapProps) {
@@ -150,6 +154,17 @@ export default function LeafletMap({
 
     map.on('moveend', handleMoveEnd);
 
+    map.whenReady(() => {
+      if (!onBoundsChangeRef.current) return;
+      const b = map.getBounds();
+      onBoundsChangeRef.current({
+        north: b.getNorth(),
+        south: b.getSouth(),
+        east: b.getEast(),
+        west: b.getWest(),
+      });
+    });
+
     const vehicleStates = vehicleStateRef.current;
 
     return () => {
@@ -191,10 +206,18 @@ export default function LeafletMap({
       if (target) {
         lastFocusIdRef.current = focusMarkerId;
         hasFittedBoundsRef.current = true;
-        suppressNextMoveRef.current = true;
         map.setView([target.lat, target.lng], Math.max(map.getZoom(), 16), {
           animate: false,
         });
+        if (onBoundsChangeRef.current) {
+          const b = map.getBounds();
+          onBoundsChangeRef.current({
+            north: b.getNorth(),
+            south: b.getSouth(),
+            east: b.getEast(),
+            west: b.getWest(),
+          });
+        }
       }
     }
 
@@ -363,6 +386,41 @@ export default function LeafletMap({
     }
   }, [polyline, polylineColor, markers, focusMarkerId]);
 
+  const lastUserCoordsKeyRef = useRef<string>('');
+
+  // 同步外部定位座標到地圖藍點，並在座標更新時跟隨移動視角
+  useEffect(() => {
+    const map = mapRef.current;
+    const userGroup = userLayerRef.current;
+    if (!map || !userGroup || !userCoords) return;
+
+    const coordKey = `${userCoords.lat.toFixed(5)},${userCoords.lng.toFixed(5)}`;
+    userGroup.clearLayers();
+    L.circle([userCoords.lat, userCoords.lng], {
+      radius: 80,
+      color: '#2563EB',
+      fillColor: '#3B82F6',
+      fillOpacity: 0.14,
+      weight: 1,
+    }).addTo(userGroup);
+    L.circleMarker([userCoords.lat, userCoords.lng], {
+      radius: 8,
+      color: '#ffffff',
+      fillColor: '#2563EB',
+      fillOpacity: 1,
+      weight: 3,
+    })
+      .bindPopup('<strong>您的目前位置</strong>')
+      .addTo(userGroup);
+
+    if (lastUserCoordsKeyRef.current && lastUserCoordsKeyRef.current !== coordKey && !focusMarkerId) {
+      map.setView([userCoords.lat, userCoords.lng], Math.max(map.getZoom(), 15), {
+        animate: true,
+      });
+    }
+    lastUserCoordsKeyRef.current = coordKey;
+  }, [userCoords, focusMarkerId]);
+
   // 捕捉使用者現在位置 (瀏覽器 GPS Geolocation)
   const handleLocateMe = () => {
     const map = mapRef.current;
@@ -404,6 +462,7 @@ export default function LeafletMap({
           .addTo(userGroup)
           .openPopup();
 
+        onUserLocate?.({ lat: latitude, lng: longitude });
         map.flyTo([latitude, longitude], 16, { duration: 0.8 });
         setLocating(false);
       },
@@ -416,7 +475,7 @@ export default function LeafletMap({
         setLocateError(msg);
         setTimeout(() => setLocateError(null), 4000);
       },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 10000 }
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
     );
   };
 
