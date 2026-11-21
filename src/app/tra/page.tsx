@@ -21,7 +21,7 @@ import {
   MINUTES_15,
   resolveTrainStopPosition,
 } from '@/lib/rail-time';
-import { LiveRailVehicle, TraTrainRow } from '@/lib/types';
+import { LiveRailVehicle, TraStopTime, TraTrainRow } from '@/lib/types';
 
 const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
   ssr: false,
@@ -55,6 +55,8 @@ function TraPageInner() {
   const [targetStation, setTargetStation] = useState(searchParams.get('to') || '');
   const [trains, setTrains] = useState<TraTrainRow[]>([]);
   const [selectedTrain, setSelectedTrain] = useState<TraTrainRow | null>(null);
+  const [selectedStops, setSelectedStops] = useState<TraStopTime[]>([]);
+  const [loadingStops, setLoadingStops] = useState(false);
   const [customHour, setCustomHour] = useState<string>(
     () => getDefaultTaipeiHourMinute15().hour
   );
@@ -142,6 +144,44 @@ function TraPageInner() {
   const handleManualFrontendRefresh = useCallback(() => {
     setFrontendUpdatedAt(triggerFrontendRefresh());
   }, [triggerFrontendRefresh]);
+
+  useEffect(() => {
+    if (!selectedTrain) return;
+    if (selectedTrain.fullStops && selectedTrain.fullStops.length > 0) {
+      const t = setTimeout(() => {
+        setSelectedStops(selectedTrain.fullStops || []);
+        setLoadingStops(false);
+      }, 0);
+      return () => clearTimeout(t);
+    }
+    const key = `tra:train:${selectedTrain.trainNo}`;
+    const cached = getCached<{ fullStops?: TraStopTime[] }>(key);
+    if (cached?.data?.fullStops?.length) {
+      const stops = cached.data.fullStops;
+      const t = setTimeout(() => {
+        setSelectedStops(stops);
+        setLoadingStops(false);
+      }, 0);
+      return () => clearTimeout(t);
+    }
+    const controller = new AbortController();
+    const startTimer = setTimeout(() => {
+      setLoadingStops(true);
+      setSelectedStops([]);
+      void fetchWithCache<{ fullStops?: TraStopTime[] }>(
+        key,
+        `/api/transit/tra?mode=train&trainNo=${encodeURIComponent(selectedTrain.trainNo)}`,
+        { signal: controller.signal }
+      )
+        .then((res) => setSelectedStops(res.fullStops || []))
+        .catch(() => {})
+        .finally(() => setLoadingStops(false));
+    }, 0);
+    return () => {
+      clearTimeout(startTimer);
+      controller.abort();
+    };
+  }, [selectedTrain, getCached, fetchWithCache]);
 
   const filteredTrains = useMemo(() => {
     const byTarget = targetStation
@@ -499,7 +539,7 @@ function TraPageInner() {
         }
       >
         {selectedTrain && (() => {
-          const stops = selectedTrain.fullStops || [];
+          const stops = selectedStops;
           const originIdx = stops.findIndex((s) => s.stationId === station);
 
           const rawLoc = selectedTrain.currentLocation || '';
@@ -530,6 +570,14 @@ function TraPageInner() {
               ? Math.min(liveIdx, originIdx)
               : Math.max(0, originIdx);
           const visibleStops = stops.slice(startIdx);
+
+          if (loadingStops && visibleStops.length === 0) {
+            return (
+              <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
+                載入停靠站時刻表中...
+              </div>
+            );
+          }
 
           if (visibleStops.length === 0) {
             return (

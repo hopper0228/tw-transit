@@ -61,6 +61,8 @@ function ThsrPageInner() {
   const [targetStation, setTargetStation] = useState(searchParams.get('to') || '');
   const [trains, setTrains] = useState<ThsrTrainRow[]>([]);
   const [selectedTrain, setSelectedTrain] = useState<ThsrTrainRow | null>(null);
+  const [selectedStops, setSelectedStops] = useState<NonNullable<ThsrTrainRow['fullStops']>>([]);
+  const [loadingStops, setLoadingStops] = useState(false);
   const [customHour, setCustomHour] = useState<string>(
     () => getDefaultTaipeiHourMinute15().hour
   );
@@ -151,6 +153,44 @@ function ThsrPageInner() {
   const handleManualFrontendRefresh = useCallback(() => {
     setFrontendUpdatedAt(triggerFrontendRefresh());
   }, [triggerFrontendRefresh]);
+
+  useEffect(() => {
+    if (!selectedTrain) return;
+    if (selectedTrain.fullStops && selectedTrain.fullStops.length > 0) {
+      const t = setTimeout(() => {
+        setSelectedStops(selectedTrain.fullStops || []);
+        setLoadingStops(false);
+      }, 0);
+      return () => clearTimeout(t);
+    }
+    const key = `thsr:train:${from}:${selectedTrain.trainNo}`;
+    const cached = getCached<{ fullStops?: ThsrTrainRow['fullStops'] }>(key);
+    if (cached?.data?.fullStops?.length) {
+      const stops = cached.data.fullStops;
+      const t = setTimeout(() => {
+        setSelectedStops(stops);
+        setLoadingStops(false);
+      }, 0);
+      return () => clearTimeout(t);
+    }
+    const controller = new AbortController();
+    const startTimer = setTimeout(() => {
+      setLoadingStops(true);
+      setSelectedStops([]);
+      void fetchWithCache<{ fullStops?: ThsrTrainRow['fullStops'] }>(
+        key,
+        `/api/transit/thsr?mode=train&from=${encodeURIComponent(from)}&trainNo=${encodeURIComponent(selectedTrain.trainNo)}`,
+        { signal: controller.signal }
+      )
+        .then((res) => setSelectedStops(res.fullStops || []))
+        .catch(() => {})
+        .finally(() => setLoadingStops(false));
+    }, 0);
+    return () => {
+      clearTimeout(startTimer);
+      controller.abort();
+    };
+  }, [selectedTrain, from, getCached, fetchWithCache]);
 
   const fromName = THSR_STATIONS.find((s) => s.id === from)?.name || from;
   const targetName = THSR_STATIONS.find((s) => s.id === targetStation)?.name || '';
@@ -496,7 +536,7 @@ function ThsrPageInner() {
         }
       >
         {selectedTrain && (() => {
-          const stops = selectedTrain.fullStops || [];
+          const stops = selectedStops;
           const originIdx = stops.findIndex((s) => s.stationId === from);
           const trainPos = resolveTrainStopPosition(stops, nowMs, 0);
           const liveIdx = trainPos
@@ -507,6 +547,13 @@ function ThsrPageInner() {
               ? Math.min(liveIdx, originIdx)
               : Math.max(0, originIdx);
           const visibleStops = stops.slice(startIdx);
+          if (loadingStops && visibleStops.length === 0) {
+            return (
+              <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
+                載入停靠站與餘位中...
+              </div>
+            );
+          }
           if (visibleStops.length === 0) return null;
 
           return (

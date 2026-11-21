@@ -8,6 +8,7 @@ import {
   MetroStationDetail,
   MetroSystemSnapshot,
   ThsrTrainRow,
+  TraStopTime,
   TraTrainRow,
 } from './types';
 
@@ -968,7 +969,6 @@ export async function getRealTraData(
           bikeFlag: meta?.bikeFlag,
           breastFeedingFlag: meta?.breastFeedingFlag,
           remainingStops: s.remainingStops,
-          fullStops: meta?.stops,
         };
       });
     };
@@ -1237,17 +1237,6 @@ export async function getRealThsrData(
             businessSeatStatus: stSeats?.biz ?? 'available',
           };
         });
-        const fullStops = stops.map((st, idx) => {
-          const stSeats = idx > fromIdx ? trainSeatMap?.get(st.StationID) : undefined;
-          return {
-            stationId: st.StationID,
-            stationName: st.StationName?.Zh_tw || st.StationID,
-            arrivalTime: (st.ArrivalTime || st.DepartureTime || '--:--').slice(0, 5),
-            departureTime: (st.DepartureTime || st.ArrivalTime || '--:--').slice(0, 5),
-            standardSeatStatus: stSeats?.std,
-            businessSeatStatus: stSeats?.biz,
-          };
-        });
         const liveMatch = liveVehicles.find(
           (v) => v.id === `thsr-live-${item.DailyTrainInfo.TrainNo}`
         );
@@ -1269,7 +1258,6 @@ export async function getRealThsrData(
           nonReservedCars: '10-12車',
           liveSubtitle: liveMatch?.subtitle?.replace('<br/>', ' · '),
           remainingStops,
-          fullStops,
         });
       }
     }
@@ -1302,4 +1290,66 @@ export async function getRealThsrData(
       source: 'tdx',
     };
   }
+}
+
+/**
+ * 依車次編號取得單一高鐵列車完整停靠站與從出發站起之各站餘位
+ */
+export async function getThsrTrainStops(from: string, trainNo: string) {
+  if (!isTdxConfigured()) return [];
+  try {
+    const daily = await fetchTdx<TdxThsrDaily[]>(
+      '/v2/Rail/THSR/DailyTimetable/Today?%24format=JSON',
+      3600,
+      true
+    );
+    const item = (Array.isArray(daily) ? daily : []).find(
+      (d) => d.DailyTrainInfo?.TrainNo === trainNo
+    );
+    if (!item?.StopTimes) return [];
+
+    const seatData = await fetchTdx<TdxThsrSeatList>(
+      `/v2/Rail/THSR/AvailableSeatStatusList/${encodeURIComponent(from)}?%24format=JSON`,
+      60
+    ).catch(() => ({ AvailableSeats: [] }));
+
+    const seatRow = (seatData?.AvailableSeats || []).find(
+      (s) => s.TrainNo === trainNo
+    );
+    const seatByStop = new Map<
+      string,
+      { std: 'available' | 'limited' | 'full'; biz: 'available' | 'limited' | 'full' }
+    >();
+    for (const st of seatRow?.StopStations || []) {
+      seatByStop.set(st.StationID, {
+        std: mapSeatCode(st.StandardSeatStatus),
+        biz: mapSeatCode(st.BusinessSeatStatus),
+      });
+    }
+
+    const fromIdx = item.StopTimes.findIndex((s) => s.StationID === from);
+    return item.StopTimes.map((st, idx) => {
+      const stSeats = idx > fromIdx ? seatByStop.get(st.StationID) : undefined;
+      return {
+        stationId: st.StationID,
+        stationName: st.StationName?.Zh_tw || st.StationID,
+        arrivalTime: (st.ArrivalTime || st.DepartureTime || '--:--').slice(0, 5),
+        departureTime: (st.DepartureTime || st.ArrivalTime || '--:--').slice(0, 5),
+        standardSeatStatus: stSeats?.std,
+        businessSeatStatus: stSeats?.biz,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 依車次編號取得單一台鐵列車完整停靠站時刻表（直接讀取已快取之當日索引）
+ */
+export async function getTraTrainStops(trainNo: string): Promise<TraStopTime[]> {
+  if (!isTdxConfigured()) return [];
+  const { dateStr } = getTaipeiNow();
+  const index = await getTraDailyIndex(dateStr);
+  return index?.trainByNo.get(trainNo)?.stops || [];
 }

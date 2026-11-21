@@ -67,7 +67,14 @@ export async function GET(req: NextRequest) {
         sourceUpdatedAt: Date.now(),
         source: 'opendata',
       },
-      { headers: { 'Cache-Control': 'no-store, max-age=0' } }
+      {
+        headers: {
+          'Cache-Control':
+            stations.length > 0
+              ? 'public, s-maxage=30, stale-while-revalidate=60'
+              : 'no-store, max-age=0',
+        },
+      }
     );
   } catch {
     return NextResponse.json(
