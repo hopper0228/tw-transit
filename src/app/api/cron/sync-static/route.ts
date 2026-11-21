@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStaticSyncStatus } from '@/lib/db';
 import { syncOpenDataStaticToDb } from '@/lib/opendata-client';
-import { syncDailyStaticToDb } from '@/lib/rail-live';
+import { syncMetroStaticToDb, syncRailStaticToDb } from '@/lib/rail-live';
 
 export const maxDuration = 60;
 
@@ -16,9 +16,12 @@ export async function GET(req: NextRequest) {
 
   try {
     const group = req.nextUrl.searchParams.get('group') || 'all';
-    const [rail, opendata] = await Promise.all([
+    const [rail, metro, opendata] = await Promise.all([
       group === 'all' || group === 'rail'
-        ? syncDailyStaticToDb()
+        ? syncRailStaticToDb()
+        : Promise.resolve({}),
+      group === 'all' || group === 'metro'
+        ? syncMetroStaticToDb()
         : Promise.resolve({}),
       group === 'all' || group === 'opendata'
         ? syncOpenDataStaticToDb()
@@ -26,7 +29,7 @@ export async function GET(req: NextRequest) {
     ]);
     const status = await getStaticSyncStatus();
     return NextResponse.json(
-      { ok: true, group, summary: { ...rail, ...opendata }, status },
+      { ok: true, group, summary: { ...rail, ...metro, ...opendata }, status },
       { headers: { 'Cache-Control': 'no-store, max-age=0' } }
     );
   } catch (err) {

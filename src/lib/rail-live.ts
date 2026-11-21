@@ -1718,16 +1718,12 @@ export async function getRealThsrLive(from: string): Promise<{
   }
 }
 
-/**
- * 每日靜態時刻表同步作業（供 Vercel Cron 每天凌晨呼叫一次，直接持久化至 Neon Postgres）
- */
-export async function syncDailyStaticToDb(): Promise<{
+export async function syncRailStaticToDb(): Promise<{
   dateStr: string;
   dbConfigured: boolean;
   traStations: number;
   traTrains: number;
   thsrTrains: number;
-  metroSystems: Record<string, number>;
 }> {
   const { dateStr } = getTaipeiNow();
   if (!isTdxConfigured()) {
@@ -1737,14 +1733,11 @@ export async function syncDailyStaticToDb(): Promise<{
       traStations: 0,
       traTrains: 0,
       thsrTrains: 0,
-      metroSystems: {},
     };
   }
 
-  // 清除實例記憶強迫向 TDX 重新拉取今日最新靜態時刻表並寫入 Postgres
   traDailyIndexCache = null;
   thsrDailyCache = null;
-  metroScheduleIndexCache.clear();
 
   const traIndex = await getTraDailyIndex(dateStr);
   if (traIndex && isDbConfigured()) {
@@ -1767,25 +1760,39 @@ export async function syncDailyStaticToDb(): Promise<{
     );
   }
 
-  const metroSystems: Record<string, number> = {};
-  const metroResults = await Promise.allSettled(
-    METRO_SYSTEMS.map(async (sys) => {
-      const map = await getMetroSystemTables(sys.id, true);
-      return [sys.id, map.size] as const;
-    })
-  );
-  for (const res of metroResults) {
-    if (res.status === 'fulfilled') {
-      metroSystems[res.value[0]] = res.value[1];
-    }
-  }
-
   return {
     dateStr,
     dbConfigured: isDbConfigured(),
     traStations: traIndex?.byStation.size || 0,
     traTrains: traIndex?.trains.length || 0,
     thsrTrains: thsrList.length,
-    metroSystems,
   };
+}
+
+export async function syncMetroStaticToDb(): Promise<{
+  dateStr: string;
+  metroSystems: Record<string, number>;
+}> {
+  const { dateStr } = getTaipeiNow();
+  if (!isTdxConfigured()) {
+    return { dateStr, metroSystems: {} };
+  }
+  metroScheduleIndexCache.clear();
+  const metroSystems: Record<string, number> = {};
+  for (let i = 0; i < METRO_SYSTEMS.length; i++) {
+    const sys = METRO_SYSTEMS[i];
+    if (i > 0) await new Promise((r) => setTimeout(r, 350));
+    const map = await getMetroSystemTables(sys.id, true);
+    metroSystems[sys.id] = map.size;
+  }
+  return { dateStr, metroSystems };
+}
+
+/**
+ * 每日靜態時刻表同步作業（供 Vercel Cron 每天凌晨呼叫一次，直接持久化至 Neon Postgres）
+ */
+export async function syncDailyStaticToDb() {
+  const rail = await syncRailStaticToDb();
+  const metro = await syncMetroStaticToDb();
+  return { ...rail, metroSystems: metro.metroSystems };
 }
