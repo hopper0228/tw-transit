@@ -704,17 +704,45 @@ function ThsrPageInner() {
               ? Math.min(liveIdx, originIdx)
               : Math.max(0, originIdx);
           const visibleStops = stops.slice(startIdx);
+
+          const posStationName = trainPos
+            ? stops.find((s) => s.stationId === trainPos.stationId)?.stationName ||
+              THSR_STATIONS.find((s) => s.id === trainPos.stationId)?.name ||
+              trainPos.stationId
+            : '';
+          const summaryLocationText = trainPos
+            ? `${posStationName}（${trainPos.action}）`
+            : `${activeSelectedTrain.originStation || fromName}（預計 ${activeSelectedTrain.departureTime} 發車）`;
+
+          const locationBanner = (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/25 bg-amber-50 px-3.5 py-2.5 text-xs dark:border-amber-400/25 dark:bg-amber-950/30">
+              <span className="font-medium text-amber-800 dark:text-amber-300">
+                列車目前位置
+              </span>
+              <span className="font-bold text-amber-900 dark:text-amber-200">
+                {summaryLocationText}
+              </span>
+            </div>
+          );
+
           if (loadingStops && visibleStops.length === 0) {
             return (
-              <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
-                載入停靠站與餘位中...
+              <div className="space-y-3">
+                {locationBanner}
+                <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
+                  載入停靠站與餘位中...
+                </div>
               </div>
             );
           }
-          if (visibleStops.length === 0) return null;
+          if (visibleStops.length === 0) {
+            return locationBanner;
+          }
 
           return (
-            <div className="overflow-hidden rounded-lg border border-slate-900/8 dark:border-slate-100/8">
+            <div className="space-y-3">
+              {locationBanner}
+              <div className="overflow-hidden rounded-lg border border-slate-900/8 dark:border-slate-100/8">
               <div className="grid grid-cols-12 border-b border-slate-900/8 bg-[#f5f7fa] px-3.5 py-2 text-[11px] font-medium text-[#6b7487] dark:border-slate-100/8 dark:bg-[#1a1e28] dark:text-[#7a8296]">
                 <span className="col-span-6">停靠站與位置</span>
                 <span className="col-span-2 text-right">時間</span>
@@ -768,6 +796,7 @@ function ThsrPageInner() {
                   );
                 })}
               </ul>
+              </div>
             </div>
           );
         })()}

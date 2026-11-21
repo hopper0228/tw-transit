@@ -706,18 +706,41 @@ function TraPageInner() {
                 ? '已發車'
                 : '';
 
+          const liveStationInStopsIdx = activeSelectedTrain.currentStationId
+            ? stops.findIndex((s) => s.stationId === activeSelectedTrain.currentStationId)
+            : -1;
+
           const fallbackPos =
-            !activeSelectedTrain.currentStationId && stops.length > 0
+            liveStationInStopsIdx < 0 && stops.length > 0
               ? resolveTrainStopPosition(stops, nowMs, activeSelectedTrain.delayMinutes)
               : null;
 
           const activeTrainStationId =
-            activeSelectedTrain.currentStationId || fallbackPos?.stationId;
-          const trainAction = liveAction || fallbackPos?.action || '';
+            liveStationInStopsIdx >= 0
+              ? activeSelectedTrain.currentStationId
+              : fallbackPos?.stationId;
+          const trainAction =
+            liveStationInStopsIdx >= 0
+              ? liveAction
+              : fallbackPos?.action || liveAction;
 
           const liveIdx = activeTrainStationId
             ? stops.findIndex((s) => s.stationId === activeTrainStationId)
             : -1;
+
+          const fallbackStationName = fallbackPos
+            ? stops.find((s) => s.stationId === fallbackPos.stationId)?.stationName ||
+              TRA_STATIONS.find((s) => s.id === fallbackPos.stationId)?.name ||
+              fallbackPos.stationId
+            : '';
+
+          const summaryLocationText =
+            rawLoc ||
+            (fallbackPos
+              ? `${fallbackStationName}（${fallbackPos.action}）`
+              : activeSelectedTrain.departureTime
+                ? `${activeSelectedTrain.originStation || TRA_STATIONS.find((s) => s.id === station)?.name || '起站'}（預計 ${activeSelectedTrain.departureTime} 發車）`
+                : '行駛狀態更新中');
 
           // 從列車目前所在站與出發站較早者開始顯示，讓使用者在同一張表一眼看到「列車在哪」與「你在哪」
           const startIdx =
@@ -726,24 +749,42 @@ function TraPageInner() {
               : Math.max(0, originIdx);
           const visibleStops = stops.slice(startIdx);
 
+          const locationBanner = (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/25 bg-amber-50 px-3.5 py-2.5 text-xs dark:border-amber-400/25 dark:bg-amber-950/30">
+              <span className="font-medium text-amber-800 dark:text-amber-300">
+                列車目前位置
+              </span>
+              <span className="font-bold text-amber-900 dark:text-amber-200">
+                {summaryLocationText}
+              </span>
+            </div>
+          );
+
           if (loadingStops && visibleStops.length === 0) {
             return (
-              <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
-                載入停靠站時刻表中...
+              <div className="space-y-3">
+                {locationBanner}
+                <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
+                  載入停靠站時刻表中...
+                </div>
               </div>
             );
           }
 
           if (visibleStops.length === 0) {
             return (
-              <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
-                目前為即時電子看板備援資料，暫無完整停靠站表
+              <div className="space-y-3">
+                {locationBanner}
+                <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
+                  目前為即時電子看板備援資料，暫無完整停靠站表
+                </div>
               </div>
             );
           }
 
           return (
             <div className="space-y-3">
+              {locationBanner}
               {activeSelectedTrain.note && (
                 <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">
                   {activeSelectedTrain.note}
