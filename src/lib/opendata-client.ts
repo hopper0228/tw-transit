@@ -14,6 +14,7 @@ import {
   saveBusRouteStopsToDb,
   saveRailSnapshotToDb,
 } from './db';
+import { fetchTdx, isTdxConfigured } from './tdx-client';
 import {
   BusRouteDetail,
   BusRouteInfo,
@@ -694,6 +695,149 @@ interface NewTaipeiYouBikeRaw {
   act: string;
 }
 
+interface TdxBikeStationRaw {
+  StationUID: string;
+  StationName?: { Zh_tw?: string };
+  StationAddress?: { Zh_tw?: string };
+  StationPosition?: { PositionLat?: number; PositionLon?: number };
+  BikesCapacity?: number;
+}
+
+interface TdxBikeAvailRaw {
+  StationUID: string;
+  ServiceStatus?: number;
+  AvailableRentBikes?: number;
+  AvailableReturnBikes?: number;
+  AvailableRentBikesDetail?: { GeneralBikes?: number; ElectricBikes?: number };
+  UpdateTime?: string;
+}
+
+const TDX_POI_CITIES: Array<{ code: string; label: string }> = [
+  { code: 'Taoyuan', label: '桃園' },
+  { code: 'Hsinchu', label: '新竹' },
+  { code: 'HsinchuCounty', label: '新竹縣' },
+  { code: 'MiaoliCounty', label: '苗栗' },
+  { code: 'Taichung', label: '台中' },
+  { code: 'Chiayi', label: '嘉義' },
+  { code: 'Tainan', label: '台南' },
+  { code: 'Kaohsiung', label: '高雄' },
+  { code: 'PingtungCounty', label: '屏東' },
+];
+
+async function getTdxBikeStations(forceRefresh = false): Promise<YouBikeStation[]> {
+  if (!isTdxConfigured()) return [];
+  const cacheKey = 'tdx-youbike-static';
+  const now = Date.now();
+  if (!forceRefresh) {
+    const hit = cache.get(cacheKey) as CacheItem<YouBikeStation[]> | undefined;
+    if (hit && hit.expiresAt > now) return hit.data;
+
+    if (isDbConfigured()) {
+      const dbList = await getRailSnapshotFromDb<YouBikeStation[]>(
+        'youbike:tdx:stations',
+        getTaipeiDateStr()
+      );
+      if (Array.isArray(dbList) && dbList.length > 0) {
+        cache.set(cacheKey, { data: dbList, expiresAt: now + 3600 * 1000 });
+        return dbList;
+      }
+    }
+  } else {
+    cache.delete(cacheKey);
+  }
+
+  // 非排程同步時若 DB 尚未建好，避免一次打 9 支 TDX 拖慢使用端請求；僅由排程建立
+  if (!forceRefresh && isDbConfigured()) {
+    return [];
+  }
+
+  const all: YouBikeStation[] = [];
+  for (let i = 0; i < TDX_POI_CITIES.length; i++) {
+    const c = TDX_POI_CITIES[i];
+    if (i > 0) await new Promise((r) => setTimeout(r, 250));
+    const raw = await fetchTdx<TdxBikeStationRaw[]>(
+      `/v2/Bike/Station/City/${c.code}?%24format=JSON`,
+      forceRefresh ? 0 : 3600
+    ).catch(() => [] as TdxBikeStationRaw[]);
+
+    for (const st of Array.isArray(raw) ? raw : []) {
+      const lat = Number(st.StationPosition?.PositionLat);
+      const lng = Number(st.StationPosition?.PositionLon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      all.push({
+        stationUid: st.StationUID,
+        stationName: (st.StationName?.Zh_tw || st.StationUID).replace(/^YouBike2\.0_/, ''),
+        city: c.code,
+        address: `${c.label} · ${st.StationAddress?.Zh_tw || ''}`,
+        lat,
+        lng,
+        totalDocks: Number(st.BikesCapacity || 0),
+        availableBikes20: 0,
+        availableBikes20E: 0,
+        availableReturnDocks: 0,
+        serviceStatus: 1,
+        updatedAt: '靜態站點',
+      });
+    }
+  }
+
+  if (all.length > 0) {
+    cache.set(cacheKey, { data: all, expiresAt: now + 3600 * 1000 });
+    if (isDbConfigured()) {
+      await saveRailSnapshotToDb(
+        'youbike:tdx:stations',
+        'youbike_tdx_stations',
+        getTaipeiDateStr(),
+        all,
+        all.length
+      ).catch(() => {});
+    }
+  }
+  return all;
+}
+
+async function enrichTdxBikeAvailability(
+  stations: YouBikeStation[]
+): Promise<YouBikeStation[]> {
+  if (!isTdxConfigured() || stations.length === 0) return stations;
+  const tdxCities = Array.from(
+    new Set(
+      stations
+        .map((s) => s.city)
+        .filter((c) => c !== 'Taipei' && c !== 'NewTaipei')
+    )
+  ).slice(0, 2);
+  if (tdxCities.length === 0) return stations;
+
+  const availMap = new Map<string, TdxBikeAvailRaw>();
+  await Promise.all(
+    tdxCities.map(async (city) => {
+      const rows = await fetchTdx<TdxBikeAvailRaw[]>(
+        `/v2/Bike/Availability/City/${city}?%24format=JSON`,
+        15
+      ).catch(() => [] as TdxBikeAvailRaw[]);
+      for (const r of Array.isArray(rows) ? rows : []) {
+        if (r.StationUID) availMap.set(r.StationUID, r);
+      }
+    })
+  );
+
+  return stations.map((s) => {
+    const a = availMap.get(s.stationUid);
+    if (!a) return s;
+    const general = a.AvailableRentBikesDetail?.GeneralBikes ?? a.AvailableRentBikes ?? 0;
+    const elec = a.AvailableRentBikesDetail?.ElectricBikes ?? 0;
+    return {
+      ...s,
+      availableBikes20: general,
+      availableBikes20E: elec,
+      availableReturnDocks: a.AvailableReturnBikes ?? 0,
+      serviceStatus: a.ServiceStatus === 1 ? 1 : 0,
+      updatedAt: a.UpdateTime ? a.UpdateTime.slice(11, 19) : '即時',
+    };
+  });
+}
+
 export async function getRealYouBikeStations(
   query?: string,
   bounds?: GeoBounds,
@@ -701,7 +845,7 @@ export async function getRealYouBikeStations(
   maxDistanceMeters?: number,
   limit = 50
 ): Promise<{ stations: YouBikeStation[]; total: number }> {
-  const [tpe, ntpc] = await Promise.all([
+  const [tpe, ntpc, tdxExtra] = await Promise.all([
     fetchAndTransform<TaipeiYouBikeRaw[], YouBikeStation[]>(
       'tpe-youbike-compact',
       'https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json',
@@ -749,9 +893,10 @@ export async function getRealYouBikeStations(
           };
         })
     ).catch(() => [] as YouBikeStation[]),
+    getTdxBikeStations().catch(() => [] as YouBikeStation[]),
   ]);
 
-  const allStations = [...tpe, ...ntpc];
+  const allStations = [...tpe, ...ntpc, ...tdxExtra];
   const q = (query || '').trim().toLowerCase();
 
   const filtered = allStations.filter((s) => {
@@ -791,7 +936,7 @@ export async function getRealYouBikeStations(
           }
         : s
     );
-    return { stations: sliced, total: filtered.length };
+    return { stations: await enrichTdxBikeAvailability(sliced), total: filtered.length };
   }
 
   if (userPoint) {
@@ -819,10 +964,16 @@ export async function getRealYouBikeStations(
       ? sliced.filter((s) => (s.distanceMeters ?? 0) <= maxDistanceMeters)
       : sliced;
 
-    return { stations: finalStations, total: scored.length };
+    return {
+      stations: await enrichTdxBikeAvailability(finalStations),
+      total: scored.length,
+    };
   }
 
-  return { stations: filtered.slice(0, limit), total: filtered.length };
+  return {
+    stations: await enrichTdxBikeAvailability(filtered.slice(0, limit)),
+    total: filtered.length,
+  };
 }
 
 // ==========================================
@@ -962,33 +1113,38 @@ async function getNtpcParkingLots(forceRefresh = false): Promise<ParkingLot[]> {
     cache.delete(cacheKey);
   }
 
-  const list = await fetchAndTransform<NtpcParkRaw[], ParkingLot[]>(
-    cacheKey,
-    'https://data.ntpc.gov.tw/api/datasets/b1464ef0-9c7c-4a6f-abf7-6bdf32847e68/json?page=0&size=1000',
-    3600,
-    false,
-    (raw) => {
-      const out: ParkingLot[] = [];
-      for (const p of raw || []) {
-        const wgs = twd97ToWgs84(Number(p.TW97X), Number(p.TW97Y));
-        if (!wgs) continue;
-        out.push({
-          carParkId: `NTPC-${p.ID}`,
-          name: p.NAME,
-          city: 'NewTaipei',
-          address: `新北 ${p.AREA} · ${p.ADDRESS}`,
-          lat: wgs.lat,
-          lng: wgs.lng,
-          totalSpaces: Number(p.TOTALCAR || 0),
-          availableSpaces: null,
-          fareDescription: p.PAYEX?.slice(0, 80) || '依現場公告',
-          parkingType: p.TYPE === '1' ? '平面' : '立體',
-          updatedAt: '費率與格位',
-        });
-      }
-      return out;
+  const list: ParkingLot[] = [];
+  for (let page = 0; page < 5; page++) {
+    const res = await fetch(
+      `https://data.ntpc.gov.tw/api/datasets/b1464ef0-9c7c-4a6f-abf7-6bdf32847e68/json?page=${page}&size=1000`,
+      { cache: 'no-store' }
+    );
+    if (!res.ok) break;
+    const raw = (await res.json()) as NtpcParkRaw[];
+    if (!Array.isArray(raw) || raw.length === 0) break;
+    for (const p of raw) {
+      const wgs = twd97ToWgs84(Number(p.TW97X), Number(p.TW97Y));
+      if (!wgs) continue;
+      list.push({
+        carParkId: `NTPC-${p.ID}`,
+        name: p.NAME,
+        city: 'NewTaipei',
+        address: `新北 ${p.AREA} · ${p.ADDRESS}`,
+        lat: wgs.lat,
+        lng: wgs.lng,
+        totalSpaces: Number(p.TOTALCAR || 0),
+        availableSpaces: null,
+        fareDescription: p.PAYEX?.slice(0, 80) || '依現場公告',
+        parkingType: p.TYPE === '1' ? '平面' : '立體',
+        updatedAt: '費率與格位',
+      });
     }
-  );
+    if (raw.length < 1000) break;
+  }
+
+  if (list.length > 0) {
+    cache.set(cacheKey, { data: list, expiresAt: now + 3600 * 1000 });
+  }
 
   if (list.length > 0 && isDbConfigured()) {
     const p = saveRailSnapshotToDb(
@@ -1002,6 +1158,100 @@ async function getNtpcParkingLots(forceRefresh = false): Promise<ParkingLot[]> {
     else void p;
   }
   return list;
+}
+
+interface TdxCarParkRaw {
+  CarParkID: string;
+  CarParkName?: { Zh_tw?: string };
+  Address?: string;
+  CarParkPosition?: { PositionLat?: number; PositionLon?: number };
+  FareDescription?: string;
+  TotalSpaces?: number;
+  CarParkType?: number;
+}
+
+async function getTdxParkingLots(forceRefresh = false): Promise<ParkingLot[]> {
+  if (!isTdxConfigured()) return [];
+  const cacheKey = 'tdx-parking-static';
+  const now = Date.now();
+  if (!forceRefresh) {
+    const hit = cache.get(cacheKey) as CacheItem<ParkingLot[]> | undefined;
+    if (hit && hit.expiresAt > now) return hit.data;
+
+    if (isDbConfigured()) {
+      const dbList = await getRailSnapshotFromDb<ParkingLot[]>(
+        'parking:tdx:desc',
+        getTaipeiDateStr()
+      );
+      if (Array.isArray(dbList) && dbList.length > 0) {
+        cache.set(cacheKey, { data: dbList, expiresAt: now + 3600 * 1000 });
+        return dbList;
+      }
+    }
+  } else {
+    cache.delete(cacheKey);
+  }
+
+  if (!forceRefresh && isDbConfigured()) {
+    return [];
+  }
+
+  const all: ParkingLot[] = [];
+  for (let i = 0; i < TDX_POI_CITIES.length; i++) {
+    const c = TDX_POI_CITIES[i];
+    if (i > 0) await new Promise((r) => setTimeout(r, 250));
+    const raw = await fetchTdx<TdxCarParkRaw[] | { CarParks?: TdxCarParkRaw[] }>(
+      `/v1/Parking/OffStreet/CarPark/City/${c.code}?%24format=JSON`,
+      forceRefresh ? 0 : 3600
+    ).catch(() => [] as TdxCarParkRaw[]);
+    const list = Array.isArray(raw) ? raw : raw?.CarParks || [];
+    for (const p of list) {
+      const lat = Number(p.CarParkPosition?.PositionLat);
+      const lng = Number(p.CarParkPosition?.PositionLon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      all.push({
+        carParkId: `TDX-${c.code}-${p.CarParkID}`,
+        name: p.CarParkName?.Zh_tw || p.CarParkID,
+        city: c.code,
+        address: `${c.label} · ${p.Address || '依現場公告'}`,
+        lat,
+        lng,
+        totalSpaces: Number(p.TotalSpaces || 0),
+        availableSpaces: null,
+        fareDescription: p.FareDescription?.slice(0, 80) || '依現場公告',
+        parkingType: p.CarParkType === 1 ? '平面' : '立體',
+        updatedAt: '費率與格位',
+      });
+    }
+  }
+
+  if (all.length > 0) {
+    cache.set(cacheKey, { data: all, expiresAt: now + 3600 * 1000 });
+    if (isDbConfigured()) {
+      await saveRailSnapshotToDb(
+        'parking:tdx:desc',
+        'parking_tdx_desc',
+        getTaipeiDateStr(),
+        all,
+        all.length
+      ).catch(() => {});
+    }
+  }
+  return all;
+}
+
+export async function syncTdxPoiStaticToDb(): Promise<{
+  tdxBikeStations: number;
+  tdxParking: number;
+}> {
+  const [tdxBikes, tdxParking] = await Promise.all([
+    getTdxBikeStations(true).catch(() => [] as YouBikeStation[]),
+    getTdxParkingLots(true).catch(() => [] as ParkingLot[]),
+  ]);
+  return {
+    tdxBikeStations: tdxBikes.length,
+    tdxParking: tdxParking.length,
+  };
 }
 
 export async function syncOpenDataStaticToDb(): Promise<{
@@ -1032,7 +1282,7 @@ export async function getRealParkingLots(
   maxDistanceMeters?: number,
   limit = 50
 ): Promise<{ lots: ParkingLot[]; total: number }> {
-  const [tpeMetas, availMap, ntpcLots] = await Promise.all([
+  const [tpeMetas, availMap, ntpcLots, tdxLots] = await Promise.all([
     getTpeParkingMetas().catch(() => [] as CompactParkingMeta[]),
     fetchAndTransform<{ data: { park: TcmsvParkAvail[] } }, Map<string, number>>(
       'tpe-parking-avail-map',
@@ -1050,6 +1300,7 @@ export async function getRealParkingLots(
       }
     ).catch(() => new Map<string, number>()),
     getNtpcParkingLots().catch(() => [] as ParkingLot[]),
+    getTdxParkingLots().catch(() => [] as ParkingLot[]),
   ]);
 
   const q = (query || '').trim().toLowerCase();
@@ -1057,8 +1308,7 @@ export async function getRealParkingLots(
 
   for (const p of tpeMetas) {
     const avail = availMap.get(p.id);
-    if (avail === undefined) continue;
-    if (onlyAvailable && avail === 0) continue;
+    if (onlyAvailable && (avail === undefined || avail === 0)) continue;
 
     if (
       bounds &&
@@ -1086,15 +1336,15 @@ export async function getRealParkingLots(
       lat: p.lat,
       lng: p.lng,
       totalSpaces: p.totalSpaces,
-      availableSpaces: avail,
+      availableSpaces: avail ?? null,
       fareDescription: p.fareDescription,
       parkingType: p.parkingType,
-      updatedAt: '即時',
+      updatedAt: avail !== undefined ? '即時' : '依現場為準',
     });
   }
 
   if (!onlyAvailable) {
-    for (const p of ntpcLots) {
+    for (const p of [...ntpcLots, ...tdxLots]) {
       if (
         bounds &&
         (p.lat < bounds.south ||

@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/sync-static?group=opendata",
       "schedule": "35 20 * * *"
+    },
+    {
+      "path": "/api/cron/sync-static?group=tdx_poi",
+      "schedule": "38 20 * * *"
     }
   ]
 }
