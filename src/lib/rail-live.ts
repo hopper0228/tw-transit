@@ -900,10 +900,12 @@ export async function getRealTraData(
 
   const delayMap = new Map<string, number>();
   const liveLocMap = new Map<string, string>();
+  const liveStationIdMap = new Map<string, string>();
   const liveVehicles: LiveRailVehicle[] = [];
 
   for (const item of liveList) {
     delayMap.set(item.TrainNo, item.DelayTime ?? 0);
+    liveStationIdMap.set(item.TrainNo, item.StationID);
     const statusLabel =
       item.TrainStationStatus === 0
         ? '進站中'
@@ -961,6 +963,7 @@ export async function getRealTraData(
           durationMinutes: 0,
           delayMinutes: delay,
           statusText: delay > 0 ? `晚 ${delay} 分` : '準點',
+          currentStationId: liveStationIdMap.get(s.trainNo),
           currentLocation: liveLocMap.get(s.trainNo),
           note: meta?.note,
           wheelchairFlag: meta?.wheelchairFlag,

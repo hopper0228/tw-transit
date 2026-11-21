@@ -454,39 +454,63 @@ function TraPageInner() {
             : undefined
         }
       >
-        {selectedTrain && (
-          <div className="space-y-4">
-            <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] px-3.5 py-2.5 text-xs text-[#4b5565] dark:border-slate-100/8 dark:bg-[#1a1e28] dark:text-[#a3a9b8]">
-              <div className="flex items-center justify-between gap-2">
-                <span>
-                  目前位置：{selectedTrain.currentLocation || '尚未進入即時區間'}
-                </span>
-                <span className="font-mono font-medium text-[#111827] dark:text-[#eef0f5]">
-                  {selectedTrain.statusText}
-                </span>
-              </div>
-              {selectedTrain.note && (
-                <div className="mt-1 text-[11px] text-[#6b7487] dark:text-[#7a8296]">
-                  {selectedTrain.note}
-                </div>
-              )}
-            </div>
+        {selectedTrain && (() => {
+          const stops = selectedTrain.fullStops || [];
+          const originIdx = stops.findIndex((s) => s.stationId === station);
+          const startIdx = Math.max(0, originIdx);
+          const upcomingStops = stops.slice(startIdx);
+          const liveIdx = selectedTrain.currentStationId
+            ? stops.findIndex((s) => s.stationId === selectedTrain.currentStationId)
+            : -1;
 
-            {(() => {
-              const stops = selectedTrain.fullStops || [];
-              const startIdx = Math.max(
-                0,
-                stops.findIndex((s) => s.stationId === station)
-              );
-              const upcomingStops = stops.slice(startIdx);
-              if (upcomingStops.length === 0) {
-                return (
-                  <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
-                    目前為即時電子看板備援資料，暫無完整停靠站表
-                  </div>
-                );
+          let positionSummary = '列車尚未發車或尚未進入即時偵測區間';
+          if (selectedTrain.currentLocation) {
+            if (liveIdx >= 0 && originIdx >= 0) {
+              const diff = originIdx - liveIdx;
+              if (diff > 0) {
+                positionSummary = `距離本站還有 ${diff} 站（目前：${selectedTrain.currentLocation}）`;
+              } else if (diff === 0) {
+                positionSummary = `列車目前就在本站（${selectedTrain.currentLocation}）`;
+              } else {
+                positionSummary = `已過本站 ${Math.abs(diff)} 站（目前：${selectedTrain.currentLocation}）`;
               }
-              return (
+            } else {
+              positionSummary = `目前位於：${selectedTrain.currentLocation}`;
+            }
+          }
+
+          const delaySummary =
+            selectedTrain.delayMinutes > 0
+              ? `目前誤點 ${selectedTrain.delayMinutes} 分（預估各站約晚 ${selectedTrain.delayMinutes} 分）`
+              : '目前準點運行';
+
+          return (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] px-3.5 py-2.5 text-xs dark:border-slate-100/8 dark:bg-[#1a1e28]">
+                <div className="font-medium text-[#111827] dark:text-[#eef0f5]">
+                  {positionSummary}
+                </div>
+                <div
+                  className={`mt-1 font-mono ${
+                    selectedTrain.delayMinutes > 0
+                      ? 'text-[#dc2626] dark:text-[#e5484d]'
+                      : 'text-[#16a34a] dark:text-[#4cc38a]'
+                  }`}
+                >
+                  {delaySummary}
+                </div>
+                {selectedTrain.note && (
+                  <div className="mt-1 text-[11px] text-[#6b7487] dark:text-[#7a8296]">
+                    {selectedTrain.note}
+                  </div>
+                )}
+              </div>
+
+              {upcomingStops.length === 0 ? (
+                <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
+                  目前為即時電子看板備援資料，暫無完整停靠站表
+                </div>
+              ) : (
                 <div>
                   <div className="mb-2 flex items-center justify-between text-xs text-[#6b7487] dark:text-[#7a8296]">
                     <span>從本站出發後續停靠站</span>
@@ -496,6 +520,7 @@ function TraPageInner() {
                     {upcomingStops.map((st, idx) => {
                       const isOrigin = st.stationId === station;
                       const isTarget = Boolean(targetStation) && st.stationId === targetStation;
+                      const isHere = st.stationId === selectedTrain.currentStationId;
                       const timeLabel = isOrigin ? st.departureTime : st.arrivalTime;
                       return (
                         <li
@@ -516,6 +541,11 @@ function TraPageInner() {
                                 目標站
                               </span>
                             )}
+                            {isHere && (
+                              <span className="rounded bg-amber-600 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                                目前位置
+                              </span>
+                            )}
                           </div>
                           <span className="font-mono text-sm tabular-nums text-[#111827] dark:text-[#eef0f5]">
                             {timeLabel}
@@ -525,10 +555,10 @@ function TraPageInner() {
                     })}
                   </ul>
                 </div>
-              );
-            })()}
-          </div>
-        )}
+              )}
+            </div>
+          );
+        })()}
       </DetailDrawer>
     </div>
   );

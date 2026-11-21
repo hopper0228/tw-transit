@@ -111,6 +111,7 @@ export interface TraTrainRow {
   durationMinutes?: number;
   delayMinutes: number; // 0 = 準點
   statusText: string;
+  currentStationId?: string;
   currentLocation?: string;
   note?: string;
   wheelchairFlag?: boolean;
