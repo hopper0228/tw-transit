@@ -323,9 +323,10 @@ export async function upsertParkingLotsToDb(
   if (!isDbConfigured() || lots.length === 0) return;
   await ensureStaticTables();
   const sql = getSql();
-  const BATCH = 2500;
-  for (let i = 0; i < lots.length; i += BATCH) {
-    const chunk = lots.slice(i, i + BATCH);
+  const deduped = Array.from(new Map(lots.map((l) => [l.carParkId, l])).values());
+  const BATCH = 1000;
+  for (let i = 0; i < deduped.length; i += BATCH) {
+    const chunk = deduped.slice(i, i + BATCH);
     const ids = chunk.map((l) => l.carParkId);
     const cities = chunk.map((l) => l.city);
     const names = chunk.map((l) => l.name);

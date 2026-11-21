@@ -1424,9 +1424,10 @@ async function syncTdxParkingBatch(batch: 1 | 2 | 3): Promise<{
         ? TDX_POI_BATCH_2
         : TDX_POI_BATCH_3;
   const dateStr = getTaipeiDateStr();
-  const prevList = isDbConfigured()
-    ? (await getRailSnapshotFromDb<ParkingLot[]>(`parking:tdx:b${batch}`, dateStr)) || []
-    : [];
+  const prevList =
+    isDbConfigured() && batch !== 2
+      ? (await getRailSnapshotFromDb<ParkingLot[]>(`parking:tdx:b${batch}`, dateStr)) || []
+      : [];
 
   const counts: Record<string, number> = {};
   const byCity = new Map<string, ParkingLot[]>();
