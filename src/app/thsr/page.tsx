@@ -19,6 +19,7 @@ import {
   getDefaultTaipeiHourMinute15,
   HOURS_24,
   MINUTES_15,
+  resolveTrainStopPosition,
 } from '@/lib/rail-time';
 import { LiveRailVehicle, ThsrTrainRow } from '@/lib/types';
 
@@ -494,83 +495,78 @@ function ThsrPageInner() {
             : undefined
         }
       >
-        {selectedTrain && (
-          <div className="space-y-4">
-            {selectedTrain.liveSubtitle && (
-              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] px-3.5 py-2.5 text-xs text-[#4b5565] dark:border-slate-100/8 dark:bg-[#1a1e28] dark:text-[#a3a9b8]">
-                目前行駛：{selectedTrain.liveSubtitle}
+        {selectedTrain && (() => {
+          const stops = selectedTrain.fullStops || [];
+          const originIdx = stops.findIndex((s) => s.stationId === from);
+          const trainPos = resolveTrainStopPosition(stops, nowMs, 0);
+          const liveIdx = trainPos
+            ? stops.findIndex((s) => s.stationId === trainPos.stationId)
+            : -1;
+          const startIdx =
+            liveIdx >= 0 && originIdx >= 0
+              ? Math.min(liveIdx, originIdx)
+              : Math.max(0, originIdx);
+          const visibleStops = stops.slice(startIdx);
+          if (visibleStops.length === 0) return null;
+
+          return (
+            <div className="overflow-hidden rounded-lg border border-slate-900/8 dark:border-slate-100/8">
+              <div className="grid grid-cols-12 border-b border-slate-900/8 bg-[#f5f7fa] px-3.5 py-2 text-[11px] font-medium text-[#6b7487] dark:border-slate-100/8 dark:bg-[#1a1e28] dark:text-[#7a8296]">
+                <span className="col-span-6">停靠站與位置</span>
+                <span className="col-span-2 text-right">時間</span>
+                <span className="col-span-4 text-right">標準 / 商務</span>
               </div>
-            )}
-
-            {(() => {
-              const stops = selectedTrain.fullStops || [];
-              const startIdx = Math.max(
-                0,
-                stops.findIndex((s) => s.stationId === from)
-              );
-              const upcomingStops = stops.slice(startIdx);
-              if (upcomingStops.length === 0) return null;
-
-              return (
-                <div>
-                  <div className="mb-2 flex items-center justify-between text-xs text-[#6b7487] dark:text-[#7a8296]">
-                    <span>從「{fromName}」出發各站抵達與餘位</span>
-                    <span className="font-mono">{upcomingStops.length} 站</span>
-                  </div>
-                  <div className="overflow-hidden rounded-lg border border-slate-900/8 dark:border-slate-100/8">
-                    <div className="grid grid-cols-12 border-b border-slate-900/8 bg-[#f5f7fa] px-3.5 py-2 text-[11px] font-medium text-[#6b7487] dark:border-slate-100/8 dark:bg-[#1a1e28] dark:text-[#7a8296]">
-                      <span className="col-span-5">停靠站</span>
-                      <span className="col-span-2 text-right">時間</span>
-                      <span className="col-span-5 text-right">標準 / 商務</span>
-                    </div>
-                    <ul className="divide-y divide-slate-900/8 dark:divide-slate-100/8">
-                      {upcomingStops.map((st, idx) => {
-                        const isOrigin = st.stationId === from;
-                        const isTarget = Boolean(targetStation) && st.stationId === targetStation;
-                        const timeLabel = isOrigin ? st.departureTime : st.arrivalTime;
-                        return (
-                          <li
-                            key={`${st.stationId}-${idx}`}
-                            className={`grid grid-cols-12 items-center px-3.5 py-2.5 text-sm ${
-                              isOrigin || isTarget ? 'bg-[#eceff4]/80 dark:bg-[#1a1e28]' : ''
-                            }`}
-                          >
-                            <div className="col-span-5 flex items-center gap-1.5 min-w-0">
-                              <span className="truncate font-medium">{st.stationName}</span>
-                              {isOrigin && (
-                                <span className="shrink-0 rounded bg-[#0f4c81] px-1.5 py-0.5 text-[10px] font-medium text-white dark:bg-[#38bdf8] dark:text-[#0b0d14]">
-                                  出發
-                                </span>
-                              )}
-                              {isTarget && (
-                                <span className="shrink-0 rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                                  目標
-                                </span>
-                              )}
-                            </div>
-                            <span className="col-span-2 text-right font-mono text-xs tabular-nums text-[#111827] dark:text-[#eef0f5]">
-                              {timeLabel}
-                            </span>
-                            <div className="col-span-5 flex items-center justify-end gap-1.5">
-                              {st.standardSeatStatus && st.businessSeatStatus ? (
-                                <>
-                                  {renderSeatBadge(st.standardSeatStatus)}
-                                  {renderSeatBadge(st.businessSeatStatus)}
-                                </>
-                              ) : (
-                                <span className="text-xs text-[#6b7487]">—</span>
-                              )}
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        )}
+              <ul className="divide-y divide-slate-900/8 dark:divide-slate-100/8">
+                {visibleStops.map((st, idx) => {
+                  const isOrigin = st.stationId === from;
+                  const isTarget = Boolean(targetStation) && st.stationId === targetStation;
+                  const isHere = Boolean(trainPos) && st.stationId === trainPos?.stationId;
+                  const timeLabel = isOrigin ? st.departureTime : st.arrivalTime;
+                  return (
+                    <li
+                      key={`${st.stationId}-${idx}`}
+                      className={`grid grid-cols-12 items-center gap-1 px-3.5 py-2.5 text-sm ${
+                        isOrigin || isHere ? 'bg-[#eceff4]/80 dark:bg-[#1a1e28]' : ''
+                      }`}
+                    >
+                      <div className="col-span-6 flex flex-wrap items-center gap-1.5 min-w-0">
+                        <span className="font-medium">{st.stationName}</span>
+                        {isHere && trainPos && (
+                          <span className="shrink-0 rounded bg-amber-600 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                            列車 · {trainPos.action}
+                          </span>
+                        )}
+                        {isOrigin && (
+                          <span className="shrink-0 rounded bg-[#0f4c81] px-1.5 py-0.5 text-[10px] font-medium text-white dark:bg-[#38bdf8] dark:text-[#0b0d14]">
+                            你在這
+                          </span>
+                        )}
+                        {isTarget && (
+                          <span className="shrink-0 rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                            目標站
+                          </span>
+                        )}
+                      </div>
+                      <span className="col-span-2 text-right font-mono text-xs tabular-nums text-[#111827] dark:text-[#eef0f5]">
+                        {timeLabel}
+                      </span>
+                      <div className="col-span-4 flex items-center justify-end gap-1.5">
+                        {st.standardSeatStatus && st.businessSeatStatus ? (
+                          <>
+                            {renderSeatBadge(st.standardSeatStatus)}
+                            {renderSeatBadge(st.businessSeatStatus)}
+                          </>
+                        ) : (
+                          <span className="text-xs text-[#6b7487]">—</span>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          );
+        })()}
       </DetailDrawer>
     </div>
   );

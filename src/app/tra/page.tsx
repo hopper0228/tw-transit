@@ -19,6 +19,7 @@ import {
   getDefaultTaipeiHourMinute15,
   HOURS_24,
   MINUTES_15,
+  resolveTrainStopPosition,
 } from '@/lib/rail-time';
 import { LiveRailVehicle, TraTrainRow } from '@/lib/types';
 
@@ -500,24 +501,35 @@ function TraPageInner() {
         {selectedTrain && (() => {
           const stops = selectedTrain.fullStops || [];
           const originIdx = stops.findIndex((s) => s.stationId === station);
-          const liveIdx = selectedTrain.currentStationId
-            ? stops.findIndex((s) => s.stationId === selectedTrain.currentStationId)
-            : -1;
-          // 若列車尚未抵達出發站，從列車目前所在站開始顯示，讓使用者在同一張表一眼看到「列車在哪」與「你在哪」
-          const startIdx =
-            liveIdx >= 0 && originIdx >= 0
-              ? Math.min(liveIdx, originIdx)
-              : Math.max(0, originIdx);
-          const visibleStops = stops.slice(startIdx);
 
           const rawLoc = selectedTrain.currentLocation || '';
-          const trainAction = rawLoc.includes('進站')
+          const liveAction = rawLoc.includes('進站')
             ? '進站中'
             : rawLoc.includes('到站') || rawLoc.includes('停靠')
               ? '已到站'
               : rawLoc.includes('發車') || rawLoc.includes('離站')
                 ? '已發車'
                 : '';
+
+          const fallbackPos =
+            !selectedTrain.currentStationId && stops.length > 0
+              ? resolveTrainStopPosition(stops, nowMs, selectedTrain.delayMinutes)
+              : null;
+
+          const activeTrainStationId =
+            selectedTrain.currentStationId || fallbackPos?.stationId;
+          const trainAction = liveAction || fallbackPos?.action || '';
+
+          const liveIdx = activeTrainStationId
+            ? stops.findIndex((s) => s.stationId === activeTrainStationId)
+            : -1;
+
+          // 從列車目前所在站與出發站較早者開始顯示，讓使用者在同一張表一眼看到「列車在哪」與「你在哪」
+          const startIdx =
+            liveIdx >= 0 && originIdx >= 0
+              ? Math.min(liveIdx, originIdx)
+              : Math.max(0, originIdx);
+          const visibleStops = stops.slice(startIdx);
 
           if (visibleStops.length === 0) {
             return (
@@ -538,7 +550,7 @@ function TraPageInner() {
                 {visibleStops.map((st, idx) => {
                   const isOrigin = st.stationId === station;
                   const isTarget = Boolean(targetStation) && st.stationId === targetStation;
-                  const isHere = st.stationId === selectedTrain.currentStationId;
+                  const isHere = Boolean(activeTrainStationId) && st.stationId === activeTrainStationId;
                   const timeLabel = isOrigin ? st.departureTime : st.arrivalTime;
                   return (
                     <li
