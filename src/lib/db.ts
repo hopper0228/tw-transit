@@ -58,6 +58,16 @@ export async function ensureStaticTables(): Promise<void> {
         synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS bus_route_stops (
+        city TEXT NOT NULL,
+        route_id INT NOT NULL,
+        dir0 JSONB NOT NULL,
+        dir1 JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (city, route_id)
+      )
+    `;
   })().catch((err) => {
     tablesReadyPromise = null;
     throw err;
@@ -202,6 +212,59 @@ export async function saveRailSnapshotToDb(
     DO UPDATE SET service_date = EXCLUDED.service_date, record_count = EXCLUDED.record_count, synced_at = NOW()
   `;
   await sql`DELETE FROM rail_daily_snapshots WHERE service_date < ${serviceDate}`;
+}
+
+export async function getBusRouteStopsFromDb<T>(
+  city: string,
+  routeId: number
+): Promise<{ dir0: T[]; dir1: T[] } | null> {
+  if (!isDbConfigured()) return null;
+  try {
+    await ensureStaticTables();
+    const sql = getSql();
+    const rows = (await sql`
+      SELECT dir0, dir1 FROM bus_route_stops
+      WHERE city = ${city} AND route_id = ${routeId}
+      LIMIT 1
+    `) as Array<{ dir0: T[]; dir1: T[] }>;
+    return rows.length > 0 ? { dir0: rows[0].dir0 || [], dir1: rows[0].dir1 || [] } : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveBusRouteStopsToDb(
+  city: string,
+  serviceDate: string,
+  stopsMap: Map<number, { dir0: unknown[]; dir1: unknown[] }>
+): Promise<void> {
+  if (!isDbConfigured() || stopsMap.size === 0) return;
+  await ensureStaticTables();
+  const sql = getSql();
+
+  const entries = Array.from(stopsMap.entries());
+  const BATCH = 80;
+  for (let i = 0; i < entries.length; i += BATCH) {
+    const chunk = entries.slice(i, i + BATCH);
+    const cities = chunk.map(() => city);
+    const routeIds = chunk.map(([rid]) => rid);
+    const dir0s = chunk.map(([, b]) => JSON.stringify(b.dir0));
+    const dir1s = chunk.map(([, b]) => JSON.stringify(b.dir1));
+    await sql`
+      INSERT INTO bus_route_stops (city, route_id, dir0, dir1, updated_at)
+      SELECT c, r, d0::jsonb, d1::jsonb, NOW()
+      FROM UNNEST(${cities}::text[], ${routeIds}::int[], ${dir0s}::text[], ${dir1s}::text[]) AS t(c, r, d0, d1)
+      ON CONFLICT (city, route_id)
+      DO UPDATE SET dir0 = EXCLUDED.dir0, dir1 = EXCLUDED.dir1, updated_at = NOW()
+    `;
+  }
+
+  await sql`
+    INSERT INTO static_sync_log (dataset_key, service_date, record_count, synced_at)
+    VALUES (${`bus_stops_${city.toLowerCase()}`}, ${serviceDate}, ${stopsMap.size}, NOW())
+    ON CONFLICT (dataset_key)
+    DO UPDATE SET service_date = EXCLUDED.service_date, record_count = EXCLUDED.record_count, synced_at = NOW()
+  `;
 }
 
 export async function getStaticSyncStatus(): Promise<

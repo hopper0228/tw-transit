@@ -8,12 +8,28 @@
 
 import zlib from 'zlib';
 import {
+  getBusRouteStopsFromDb,
+  getRailSnapshotFromDb,
+  isDbConfigured,
+  saveBusRouteStopsToDb,
+  saveRailSnapshotToDb,
+} from './db';
+import {
   BusRouteDetail,
   BusRouteInfo,
   BusStopStatus,
   ParkingLot,
   YouBikeStation,
 } from './types';
+
+function getTaipeiDateStr(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
 
 interface CacheItem<T> {
   data: T;
@@ -126,20 +142,40 @@ interface CompactVehicle {
   goBack: string;
 }
 
-function getCompactRoutes() {
-  return fetchAndTransform<{ BusInfo: BlobBusRoute[] }, BusRouteInfo[]>(
-    'tpe-bus-routes-compact',
+async function getCompactRoutes(forceRefresh = false): Promise<BusRouteInfo[]> {
+  const cacheKey = 'tpe-bus-routes-compact';
+  const now = Date.now();
+  if (!forceRefresh) {
+    const hit = cache.get(cacheKey) as CacheItem<BusRouteInfo[]> | undefined;
+    if (hit && hit.expiresAt > now) return hit.data;
+
+    if (isDbConfigured()) {
+      const dbList = await getRailSnapshotFromDb<BusRouteInfo[]>(
+        'bus:tpe:routes',
+        getTaipeiDateStr()
+      );
+      if (Array.isArray(dbList) && dbList.length > 0) {
+        cache.set(cacheKey, { data: dbList, expiresAt: now + 3600 * 1000 });
+        return dbList;
+      }
+    }
+  } else {
+    cache.delete(cacheKey);
+  }
+
+  const list = await fetchAndTransform<{ BusInfo: BlobBusRoute[] }, BusRouteInfo[]>(
+    cacheKey,
     'https://tcgbusfs.blob.core.windows.net/blobbus/GetRoute.gz',
     3600,
     true,
     (raw) => {
       const seen = new Set<string>();
-      const list: BusRouteInfo[] = [];
+      const out: BusRouteInfo[] = [];
       for (const r of raw.BusInfo || []) {
         const name = r.nameZh?.trim();
         if (!name || seen.has(name)) continue;
         seen.add(name);
-        list.push({
+        out.push({
           routeUid: String(r.Id),
           routeName: name,
           city: 'Taipei',
@@ -149,27 +185,64 @@ function getCompactRoutes() {
           operatorName: r.providerName || '公車業者',
         });
       }
-      return list;
+      return out;
     }
   );
+
+  if (list.length > 0 && isDbConfigured()) {
+    const p = saveRailSnapshotToDb(
+      'bus:tpe:routes',
+      'bus_routes_taipei',
+      getTaipeiDateStr(),
+      list,
+      list.length
+    ).catch(() => {});
+    if (forceRefresh) await p;
+    else void p;
+  }
+  return list;
 }
 
-function getIndexedStops() {
-  return fetchAndTransform<
+function buildRouteCoordsSummary(
+  map: Map<number, { dir0: CompactStop[]; dir1: CompactStop[] }>
+): Record<string, Array<[number, number]>> {
+  const summary: Record<string, Array<[number, number]>> = {};
+  for (const [routeId, bucket] of map.entries()) {
+    const list = bucket.dir0.length > 0 ? bucket.dir0 : bucket.dir1;
+    // 每 2 站取 1 點足以精準估算路線最近距離，並大幅縮減 DB 體積
+    const pts: Array<[number, number]> = [];
+    for (let i = 0; i < list.length; i += 2) {
+      const s = list[i];
+      if (Number.isFinite(s.lat) && Number.isFinite(s.lng)) {
+        pts.push([Number(s.lat.toFixed(5)), Number(s.lng.toFixed(5))]);
+      }
+    }
+    if (pts.length > 0) summary[String(routeId)] = pts;
+  }
+  return summary;
+}
+
+async function getIndexedStops(
+  forceRefresh = false
+): Promise<Map<number, { dir0: CompactStop[]; dir1: CompactStop[] }>> {
+  const cacheKey = 'tpe-bus-stops-idx';
+  if (forceRefresh) cache.delete(cacheKey);
+
+  const map = await fetchAndTransform<
     { BusInfo: BlobBusStop[] },
     Map<number, { dir0: CompactStop[]; dir1: CompactStop[] }>
   >(
-    'tpe-bus-stops-idx',
+    cacheKey,
     'https://tcgbusfs.blob.core.windows.net/blobbus/GetStop.gz',
     3600,
     true,
     (raw) => {
-      const map = new Map<number, { dir0: CompactStop[]; dir1: CompactStop[] }>();
+      const idx = new Map<number, { dir0: CompactStop[]; dir1: CompactStop[] }>();
       for (const s of raw.BusInfo || []) {
-        let bucket = map.get(s.routeId);
+        let bucket = idx.get(s.routeId);
         if (!bucket) {
           bucket = { dir0: [], dir1: [] };
-          map.set(s.routeId, bucket);
+          idx.set(s.routeId, bucket);
         }
         const item: CompactStop = {
           id: s.Id,
@@ -184,13 +257,68 @@ function getIndexedStops() {
           bucket.dir0.push(item);
         }
       }
-      for (const bucket of map.values()) {
+      for (const bucket of idx.values()) {
         bucket.dir0.sort((a, b) => a.seq - b.seq);
         bucket.dir1.sort((a, b) => a.seq - b.seq);
       }
-      return map;
+      return idx;
     }
   );
+
+  if (map.size > 0 && isDbConfigured()) {
+    const dateStr = getTaipeiDateStr();
+    const summary = buildRouteCoordsSummary(map);
+    cache.set('tpe-bus-stops-coords', {
+      data: summary,
+      expiresAt: Date.now() + 3600 * 1000,
+    });
+    const saveAll = Promise.all([
+      saveBusRouteStopsToDb('Taipei', dateStr, map),
+      saveRailSnapshotToDb(
+        'bus:tpe:stops-coords',
+        'bus_coords_taipei',
+        dateStr,
+        summary,
+        Object.keys(summary).length
+      ),
+    ]).catch(() => {});
+    if (forceRefresh) await saveAll;
+    else void saveAll;
+  }
+
+  return map;
+}
+
+async function getCompactStopsCoords(): Promise<Record<string, Array<[number, number]>>> {
+  const cacheKey = 'tpe-bus-stops-coords';
+  const now = Date.now();
+  const hit = cache.get(cacheKey) as
+    | CacheItem<Record<string, Array<[number, number]>>>
+    | undefined;
+  if (hit && hit.expiresAt > now) return hit.data;
+
+  const memStops = cache.get('tpe-bus-stops-idx') as
+    | CacheItem<Map<number, { dir0: CompactStop[]; dir1: CompactStop[] }>>
+    | undefined;
+  if (memStops && memStops.expiresAt > now) {
+    const summary = buildRouteCoordsSummary(memStops.data);
+    cache.set(cacheKey, { data: summary, expiresAt: now + 3600 * 1000 });
+    return summary;
+  }
+
+  if (isDbConfigured()) {
+    const dbCoords = await getRailSnapshotFromDb<Record<string, Array<[number, number]>>>(
+      'bus:tpe:stops-coords',
+      getTaipeiDateStr()
+    );
+    if (dbCoords && Object.keys(dbCoords).length > 0) {
+      cache.set(cacheKey, { data: dbCoords, expiresAt: now + 3600 * 1000 });
+      return dbCoords;
+    }
+  }
+
+  const fullMap = await getIndexedStops();
+  return buildRouteCoordsSummary(fullMap);
 }
 
 function getIndexedEstimates() {
@@ -373,25 +501,26 @@ export async function getTaipeiBusRoutes(
   }
 
   // 快速平方距離排序，最後只對前 limit 筆計算精確公尺數
-  const stopsMap = await getIndexedStops();
+  const coordsByRoute = await getCompactStopsCoords();
   const cosLat = Math.cos((userPoint.lat * Math.PI) / 180);
 
   const ranked = filtered
     .map((r) => {
-      const bucket = stopsMap.get(Number(r.routeUid));
-      if (!bucket) return { r, approxSq: Infinity, nearLat: 0, nearLng: 0 };
+      const pts = coordsByRoute[r.routeUid];
+      if (!pts || pts.length === 0) {
+        return { r, approxSq: Infinity, nearLat: 0, nearLng: 0 };
+      }
       let minSq = Infinity;
       let nearLat = 0;
       let nearLng = 0;
-      const list = bucket.dir0.length > 0 ? bucket.dir0 : bucket.dir1;
-      for (const s of list) {
-        const dLat = s.lat - userPoint.lat;
-        const dLng = (s.lng - userPoint.lng) * cosLat;
+      for (const [lat, lng] of pts) {
+        const dLat = lat - userPoint.lat;
+        const dLng = (lng - userPoint.lng) * cosLat;
         const sq = dLat * dLat + dLng * dLng;
         if (sq < minSq) {
           minSq = sq;
-          nearLat = s.lat;
-          nearLng = s.lng;
+          nearLat = lat;
+          nearLng = lng;
         }
       }
       return { r, approxSq: minSq, nearLat, nearLng };
@@ -418,9 +547,8 @@ export async function getTaipeiBusRouteDetail(
   routeName: string,
   direction: 0 | 1
 ): Promise<BusRouteDetail | null> {
-  const [routes, stopsMap, etaMap, vehMap] = await Promise.all([
+  const [routes, etaMap, vehMap] = await Promise.all([
     getCompactRoutes(),
-    getIndexedStops(),
     getIndexedEstimates(),
     getIndexedVehicles(),
   ]);
@@ -431,7 +559,21 @@ export async function getTaipeiBusRouteDetail(
   if (!route) return null;
 
   const routeId = Number(route.routeUid);
-  const stopBucket = stopsMap.get(routeId);
+  let stopBucket: { dir0: CompactStop[]; dir1: CompactStop[] } | undefined;
+
+  const memStops = cache.get('tpe-bus-stops-idx') as
+    | CacheItem<Map<number, { dir0: CompactStop[]; dir1: CompactStop[] }>>
+    | undefined;
+  if (memStops && memStops.expiresAt > Date.now()) {
+    stopBucket = memStops.data.get(routeId);
+  }
+  if (!stopBucket && isDbConfigured()) {
+    stopBucket = (await getBusRouteStopsFromDb<CompactStop>('Taipei', routeId)) ?? undefined;
+  }
+  if (!stopBucket) {
+    const stopsMap = await getIndexedStops();
+    stopBucket = stopsMap.get(routeId);
+  }
   if (!stopBucket) return null;
 
   let routeStops = direction === 0 ? stopBucket.dir0 : stopBucket.dir1;
@@ -720,6 +862,159 @@ interface NtpcParkRaw {
   TOTALCAR: string;
 }
 
+async function getTpeParkingMetas(forceRefresh = false): Promise<CompactParkingMeta[]> {
+  const cacheKey = 'tpe-parking-desc-compact';
+  const now = Date.now();
+  if (!forceRefresh) {
+    const hit = cache.get(cacheKey) as CacheItem<CompactParkingMeta[]> | undefined;
+    if (hit && hit.expiresAt > now) return hit.data;
+
+    if (isDbConfigured()) {
+      const dbList = await getRailSnapshotFromDb<CompactParkingMeta[]>(
+        'parking:tpe:desc',
+        getTaipeiDateStr()
+      );
+      if (Array.isArray(dbList) && dbList.length > 0) {
+        cache.set(cacheKey, { data: dbList, expiresAt: now + 3600 * 1000 });
+        return dbList;
+      }
+    }
+  } else {
+    cache.delete(cacheKey);
+  }
+
+  const list = await fetchAndTransform<
+    { data: { park: TcmsvParkDesc[] } },
+    CompactParkingMeta[]
+  >(
+    cacheKey,
+    'https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_alldesc.json',
+    3600,
+    false,
+    (raw) => {
+      const out: CompactParkingMeta[] = [];
+      for (const p of raw.data?.park || []) {
+        const coord = p.EntranceCoord?.EntrancecoordInfo?.[0];
+        let lat = coord ? Number(coord.Xcod) : NaN;
+        let lng = coord ? Number(coord.Ycod) : NaN;
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < 20 || lng < 118) {
+          const wgs = twd97ToWgs84(Number(p.tw97x), Number(p.tw97y));
+          if (!wgs) continue;
+          lat = wgs.lat;
+          lng = wgs.lng;
+        }
+        out.push({
+          id: p.id,
+          name: p.name,
+          address: `${p.area} · ${p.address}`,
+          lat,
+          lng,
+          totalSpaces: p.totalcar || 0,
+          fareDescription: p.payex?.slice(0, 80) || '依現場公告',
+          parkingType: p.type === '1' ? '立體' : '平面',
+        });
+      }
+      return out;
+    }
+  );
+
+  if (list.length > 0 && isDbConfigured()) {
+    const p = saveRailSnapshotToDb(
+      'parking:tpe:desc',
+      'parking_tpe_desc',
+      getTaipeiDateStr(),
+      list,
+      list.length
+    ).catch(() => {});
+    if (forceRefresh) await p;
+    else void p;
+  }
+  return list;
+}
+
+async function getNtpcParkingLots(forceRefresh = false): Promise<ParkingLot[]> {
+  const cacheKey = 'ntpc-parking-desc-compact';
+  const now = Date.now();
+  if (!forceRefresh) {
+    const hit = cache.get(cacheKey) as CacheItem<ParkingLot[]> | undefined;
+    if (hit && hit.expiresAt > now) return hit.data;
+
+    if (isDbConfigured()) {
+      const dbList = await getRailSnapshotFromDb<ParkingLot[]>(
+        'parking:ntpc:desc',
+        getTaipeiDateStr()
+      );
+      if (Array.isArray(dbList) && dbList.length > 0) {
+        cache.set(cacheKey, { data: dbList, expiresAt: now + 3600 * 1000 });
+        return dbList;
+      }
+    }
+  } else {
+    cache.delete(cacheKey);
+  }
+
+  const list = await fetchAndTransform<NtpcParkRaw[], ParkingLot[]>(
+    cacheKey,
+    'https://data.ntpc.gov.tw/api/datasets/b1464ef0-9c7c-4a6f-abf7-6bdf32847e68/json?page=0&size=1000',
+    3600,
+    false,
+    (raw) => {
+      const out: ParkingLot[] = [];
+      for (const p of raw || []) {
+        const wgs = twd97ToWgs84(Number(p.TW97X), Number(p.TW97Y));
+        if (!wgs) continue;
+        out.push({
+          carParkId: `NTPC-${p.ID}`,
+          name: p.NAME,
+          city: 'NewTaipei',
+          address: `新北 ${p.AREA} · ${p.ADDRESS}`,
+          lat: wgs.lat,
+          lng: wgs.lng,
+          totalSpaces: Number(p.TOTALCAR || 0),
+          availableSpaces: null,
+          fareDescription: p.PAYEX?.slice(0, 80) || '依現場公告',
+          parkingType: p.TYPE === '1' ? '平面' : '立體',
+          updatedAt: '費率與格位',
+        });
+      }
+      return out;
+    }
+  );
+
+  if (list.length > 0 && isDbConfigured()) {
+    const p = saveRailSnapshotToDb(
+      'parking:ntpc:desc',
+      'parking_ntpc_desc',
+      getTaipeiDateStr(),
+      list,
+      list.length
+    ).catch(() => {});
+    if (forceRefresh) await p;
+    else void p;
+  }
+  return list;
+}
+
+export async function syncOpenDataStaticToDb(): Promise<{
+  busRoutes: number;
+  busStopRoutes: number;
+  tpeParking: number;
+  ntpcParking: number;
+}> {
+  const [routes, stopsMap, tpeParking, ntpcParking] = await Promise.all([
+    getCompactRoutes(true).catch(() => [] as BusRouteInfo[]),
+    getIndexedStops(true).catch(() => new Map()),
+    getTpeParkingMetas(true).catch(() => [] as CompactParkingMeta[]),
+    getNtpcParkingLots(true).catch(() => [] as ParkingLot[]),
+  ]);
+  return {
+    busRoutes: routes.length,
+    busStopRoutes: stopsMap.size,
+    tpeParking: tpeParking.length,
+    ntpcParking: ntpcParking.length,
+  };
+}
+
 export async function getRealParkingLots(
   query?: string,
   onlyAvailable = false,
@@ -729,37 +1024,7 @@ export async function getRealParkingLots(
   limit = 50
 ): Promise<{ lots: ParkingLot[]; total: number }> {
   const [tpeMetas, availMap, ntpcLots] = await Promise.all([
-    fetchAndTransform<{ data: { park: TcmsvParkDesc[] } }, CompactParkingMeta[]>(
-      'tpe-parking-desc-compact',
-      'https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_alldesc.json',
-      3600,
-      false,
-      (raw) => {
-        const list: CompactParkingMeta[] = [];
-        for (const p of raw.data?.park || []) {
-          const coord = p.EntranceCoord?.EntrancecoordInfo?.[0];
-          let lat = coord ? Number(coord.Xcod) : NaN;
-          let lng = coord ? Number(coord.Ycod) : NaN;
-          if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < 20 || lng < 118) {
-            const wgs = twd97ToWgs84(Number(p.tw97x), Number(p.tw97y));
-            if (!wgs) continue;
-            lat = wgs.lat;
-            lng = wgs.lng;
-          }
-          list.push({
-            id: p.id,
-            name: p.name,
-            address: `${p.area} · ${p.address}`,
-            lat,
-            lng,
-            totalSpaces: p.totalcar || 0,
-            fareDescription: p.payex?.slice(0, 80) || '依現場公告',
-            parkingType: p.type === '1' ? '立體' : '平面',
-          });
-        }
-        return list;
-      }
-    ).catch(() => [] as CompactParkingMeta[]),
+    getTpeParkingMetas().catch(() => [] as CompactParkingMeta[]),
     fetchAndTransform<{ data: { park: TcmsvParkAvail[] } }, Map<string, number>>(
       'tpe-parking-avail-map',
       'https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_allavailable.json',
@@ -775,33 +1040,7 @@ export async function getRealParkingLots(
         return map;
       }
     ).catch(() => new Map<string, number>()),
-    fetchAndTransform<NtpcParkRaw[], ParkingLot[]>(
-      'ntpc-parking-desc-compact',
-      'https://data.ntpc.gov.tw/api/datasets/b1464ef0-9c7c-4a6f-abf7-6bdf32847e68/json?page=0&size=1000',
-      3600,
-      false,
-      (raw) => {
-        const list: ParkingLot[] = [];
-        for (const p of raw || []) {
-          const wgs = twd97ToWgs84(Number(p.TW97X), Number(p.TW97Y));
-          if (!wgs) continue;
-          list.push({
-            carParkId: `NTPC-${p.ID}`,
-            name: p.NAME,
-            city: 'NewTaipei',
-            address: `新北 ${p.AREA} · ${p.ADDRESS}`,
-            lat: wgs.lat,
-            lng: wgs.lng,
-            totalSpaces: Number(p.TOTALCAR || 0),
-            availableSpaces: null,
-            fareDescription: p.PAYEX?.slice(0, 80) || '依現場公告',
-            parkingType: p.TYPE === '1' ? '平面' : '立體',
-            updatedAt: '費率與格位',
-          });
-        }
-        return list;
-      }
-    ).catch(() => [] as ParkingLot[]),
+    getNtpcParkingLots().catch(() => [] as ParkingLot[]),
   ]);
 
   const q = (query || '').trim().toLowerCase();

@@ -115,17 +115,36 @@ const metroScheduleIndexCache = new Map<
 >();
 
 async function getMetroSystemTables(
-  sysId: string
+  sysId: string,
+  forceRefresh = false
 ): Promise<Map<string, CompactMetroTable[]>> {
   const now = Date.now();
-  const cached = metroScheduleIndexCache.get(sysId);
-  if (cached && cached.expiresAt > now) {
-    return cached.byStation;
+  const { dateStr } = getTaipeiNow();
+  if (!forceRefresh) {
+    const cached = metroScheduleIndexCache.get(sysId);
+    if (cached && cached.expiresAt > now) {
+      return cached.byStation;
+    }
+
+    if (isDbConfigured()) {
+      const dbObj = await getRailSnapshotFromDb<Record<string, CompactMetroTable[]>>(
+        `metro:daily:${sysId}`,
+        dateStr
+      );
+      if (dbObj && Object.keys(dbObj).length > 0) {
+        const byStation = new Map<string, CompactMetroTable[]>(Object.entries(dbObj));
+        metroScheduleIndexCache.set(sysId, {
+          expiresAt: now + 6 * 3600 * 1000,
+          byStation,
+        });
+        return byStation;
+      }
+    }
   }
 
   const ttRaw = await fetchTdx<TdxMetroStationTimetable[]>(
     `/v2/Rail/Metro/StationTimeTable/${sysId}?%24format=JSON`,
-    21600
+    forceRefresh ? 0 : 21600
   ).catch(() => [] as TdxMetroStationTimetable[]);
 
   const byStation = new Map<string, CompactMetroTable[]>();
@@ -145,6 +164,18 @@ async function getMetroSystemTables(
       expiresAt: now + 6 * 3600 * 1000,
       byStation,
     });
+    if (isDbConfigured()) {
+      const plainObj = Object.fromEntries(byStation.entries());
+      const savePromise = saveRailSnapshotToDb(
+        `metro:daily:${sysId}`,
+        `metro_daily_${sysId.toLowerCase()}`,
+        dateStr,
+        plainObj,
+        byStation.size
+      ).catch(() => {});
+      if (forceRefresh) await savePromise;
+      else void savePromise;
+    }
   }
   return byStation;
 }
@@ -1696,6 +1727,7 @@ export async function syncDailyStaticToDb(): Promise<{
   traStations: number;
   traTrains: number;
   thsrTrains: number;
+  metroSystems: Record<string, number>;
 }> {
   const { dateStr } = getTaipeiNow();
   if (!isTdxConfigured()) {
@@ -1705,12 +1737,14 @@ export async function syncDailyStaticToDb(): Promise<{
       traStations: 0,
       traTrains: 0,
       thsrTrains: 0,
+      metroSystems: {},
     };
   }
 
   // 清除實例記憶強迫向 TDX 重新拉取今日最新靜態時刻表並寫入 Postgres
   traDailyIndexCache = null;
   thsrDailyCache = null;
+  metroScheduleIndexCache.clear();
 
   const traIndex = await getTraDailyIndex(dateStr);
   if (traIndex && isDbConfigured()) {
@@ -1733,11 +1767,18 @@ export async function syncDailyStaticToDb(): Promise<{
     );
   }
 
+  const metroSystems: Record<string, number> = {};
+  for (const sys of METRO_SYSTEMS) {
+    const map = await getMetroSystemTables(sys.id, true);
+    metroSystems[sys.id] = map.size;
+  }
+
   return {
     dateStr,
     dbConfigured: isDbConfigured(),
     traStations: traIndex?.byStation.size || 0,
     traTrains: traIndex?.trains.length || 0,
     thsrTrains: thsrList.length,
+    metroSystems,
   };
 }

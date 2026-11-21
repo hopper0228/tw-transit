@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStaticSyncStatus } from '@/lib/db';
+import { syncOpenDataStaticToDb } from '@/lib/opendata-client';
 import { syncDailyStaticToDb } from '@/lib/rail-live';
 
 export const maxDuration = 60;
@@ -14,10 +15,13 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const summary = await syncDailyStaticToDb();
+    const [rail, opendata] = await Promise.all([
+      syncDailyStaticToDb(),
+      syncOpenDataStaticToDb(),
+    ]);
     const status = await getStaticSyncStatus();
     return NextResponse.json(
-      { ok: true, summary, status },
+      { ok: true, summary: { ...rail, ...opendata }, status },
       { headers: { 'Cache-Control': 'no-store, max-age=0' } }
     );
   } catch (err) {
