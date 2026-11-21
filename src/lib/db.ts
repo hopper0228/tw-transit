@@ -323,12 +323,12 @@ export async function upsertParkingLotsToDb(
   if (!isDbConfigured() || lots.length === 0) return;
   await ensureStaticTables();
   const sql = getSql();
-  const BATCH = 5000;
+  const BATCH = 2000;
   const chunks: SpatialParkingRow[][] = [];
   for (let i = 0; i < lots.length; i += BATCH) {
     chunks.push(lots.slice(i, i + BATCH));
   }
-  const CONCURRENCY = 3;
+  const CONCURRENCY = 2;
   for (let i = 0; i < chunks.length; i += CONCURRENCY) {
     await Promise.all(
       chunks.slice(i, i + CONCURRENCY).map(async (chunk) => {

@@ -1466,30 +1466,28 @@ async function syncTdxParkingBatch(batch: 1 | 2): Promise<{
   const out = Array.from(byCity.values()).flat();
   cache.delete('tdx-parking-static');
   if (out.length > 0 && isDbConfigured()) {
-    await Promise.all([
-      saveRailSnapshotToDb(
-        `parking:tdx:b${batch}`,
-        `parking_tdx_b${batch}`,
-        dateStr,
-        out,
-        out.length
-      ),
-      upsertParkingLotsToDb(
-        out.map((lot) => ({
-          carParkId: lot.carParkId,
-          city: lot.city,
-          name: lot.name,
-          address: lot.address,
-          lat: lot.lat,
-          lng: lot.lng,
-          totalSpaces: lot.totalSpaces,
-          fareDescription: lot.fareDescription,
-          parkingType: lot.parkingType,
-          updatedAt: lot.updatedAt,
-        })),
-        dateStr
-      ),
-    ]);
+    await upsertParkingLotsToDb(
+      out.map((lot) => ({
+        carParkId: lot.carParkId,
+        city: lot.city,
+        name: lot.name,
+        address: lot.address,
+        lat: lot.lat,
+        lng: lot.lng,
+        totalSpaces: lot.totalSpaces,
+        fareDescription: lot.fareDescription,
+        parkingType: lot.parkingType,
+        updatedAt: lot.updatedAt,
+      })),
+      dateStr
+    );
+    await saveRailSnapshotToDb(
+      `parking:tdx:b${batch}`,
+      `parking_tdx_b${batch}`,
+      dateStr,
+      out,
+      out.length
+    );
   }
   return { total: out.length, counts };
 }
