@@ -67,6 +67,7 @@ interface LeafletMapProps {
   polyline?: [number, number][];
   polylineColor?: string;
   markers?: MapMarker[];
+  focusMarkerId?: string | null;
   heightClass?: string;
   onBoundsChange?: (bounds: MapBounds) => void;
 }
@@ -77,6 +78,7 @@ export default function LeafletMap({
   polyline,
   polylineColor = '#2563EB',
   markers = [],
+  focusMarkerId = null,
   heightClass = 'h-[420px]',
   onBoundsChange,
 }: LeafletMapProps) {
@@ -91,6 +93,10 @@ export default function LeafletMap({
   const lastPolylineKeyRef = useRef<string>('');
   const onBoundsChangeRef = useRef(onBoundsChange);
   const suppressNextMoveRef = useRef(false);
+  const activePopupIdRef = useRef<string | null>(focusMarkerId);
+  const lastFocusIdRef = useRef<string | null>(null);
+  const staticMarkerByIdRef = useRef<Map<string, L.Layer>>(new Map());
+  const isRebuildingLayersRef = useRef(false);
 
   useEffect(() => {
     onBoundsChangeRef.current = onBoundsChange;
@@ -179,7 +185,23 @@ export default function LeafletMap({
       lastPolylineKeyRef.current = polylineKey;
     }
 
+    if (focusMarkerId && focusMarkerId !== lastFocusIdRef.current) {
+      activePopupIdRef.current = focusMarkerId;
+      const target = markers.find((m) => m.id === focusMarkerId);
+      if (target) {
+        lastFocusIdRef.current = focusMarkerId;
+        hasFittedBoundsRef.current = true;
+        suppressNextMoveRef.current = true;
+        map.setView([target.lat, target.lng], Math.max(map.getZoom(), 16), {
+          animate: false,
+        });
+      }
+    }
+
+    isRebuildingLayersRef.current = true;
     group.clearLayers();
+    staticMarkerByIdRef.current.clear();
+    isRebuildingLayersRef.current = false;
 
     if (polyline && polyline.length > 1) {
       const line = L.polyline(polyline, {
@@ -212,6 +234,8 @@ export default function LeafletMap({
     }
 
     staticMarkers.slice(0, 120).forEach((m) => {
+      const popupHtml = `<strong>${m.title}</strong>${m.subtitle ? `<br/>${m.subtitle}` : ''}`;
+      let layer: L.Layer;
       if (m.type === 'youbike' || m.type === 'parking') {
         const bg = m.color || (m.type === 'youbike' ? '#ca8a04' : '#4f46e5');
         const icon = L.divIcon({
@@ -220,21 +244,38 @@ export default function LeafletMap({
           iconSize: [52, 24],
           iconAnchor: [26, 12],
         });
-        L.marker([m.lat, m.lng], { icon })
-          .bindPopup(`<strong>${m.title}</strong><br/>${m.subtitle || ''}`)
+        layer = L.marker([m.lat, m.lng], { icon })
+          .bindPopup(popupHtml, { closeOnClick: false })
           .addTo(group);
       } else {
-        L.circleMarker([m.lat, m.lng], {
+        layer = L.circleMarker([m.lat, m.lng], {
           radius: 5.5,
           color: m.color || polylineColor,
           fillColor: '#ffffff',
           fillOpacity: 1,
           weight: 2.5,
         })
-          .bindPopup(`<strong>${m.title}</strong>${m.subtitle ? `<br/>${m.subtitle}` : ''}`)
+          .bindPopup(popupHtml, { closeOnClick: false })
           .addTo(group);
       }
+
+      layer.on('popupopen', () => {
+        activePopupIdRef.current = m.id;
+      });
+      layer.on('popupclose', () => {
+        if (!isRebuildingLayersRef.current && activePopupIdRef.current === m.id) {
+          activePopupIdRef.current = null;
+        }
+      });
+      staticMarkerByIdRef.current.set(m.id, layer);
     });
+
+    if (activePopupIdRef.current) {
+      const targetLayer = staticMarkerByIdRef.current.get(activePopupIdRef.current);
+      if (targetLayer && 'openPopup' in targetLayer && typeof targetLayer.openPopup === 'function') {
+        targetLayer.openPopup();
+      }
+    }
 
     // 平滑更新行駛中車輛標記 (保留現有 Marker 並以 requestAnimationFrame 補間移動)
     const activeIds = new Set<string>();
@@ -320,7 +361,7 @@ export default function LeafletMap({
       };
       animFrameRef.current = requestAnimationFrame(step);
     }
-  }, [polyline, polylineColor, markers]);
+  }, [polyline, polylineColor, markers, focusMarkerId]);
 
   // 捕捉使用者現在位置 (瀏覽器 GPS Geolocation)
   const handleLocateMe = () => {

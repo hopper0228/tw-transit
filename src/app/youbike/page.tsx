@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Bike, ExternalLink, List, Map as MapIcon, MapPin, Search } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
 import DetailDrawer from '@/components/DetailDrawer';
@@ -35,6 +35,7 @@ function YouBikePageInner() {
     useTransitStore();
   const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
   const [selectedStation, setSelectedStation] = useState<YouBikeStation | null>(null);
+  const [focusedStation, setFocusedStation] = useState<YouBikeStation | null>(null);
 
   const [maxDistance, setMaxDistance] = useState<number>(3000);
   const [query, setQuery] = useState(searchParams.get('q') || '');
@@ -115,18 +116,26 @@ function YouBikePageInner() {
     setFrontendUpdatedAt(triggerFrontendRefresh());
   }, [triggerFrontendRefresh]);
 
-  const markers: MapMarker[] = stations.map((st) => ({
-    id: st.stationUid,
-    lat: st.lat,
-    lng: st.lng,
-    title: st.stationName,
-    subtitle: `可借: ${st.availableBikes20 + st.availableBikes20E} / 可還: ${
-      st.availableReturnDocks
-    }`,
-    badgeText: `🚲 ${st.availableBikes20 + st.availableBikes20E}`,
-    color: st.availableBikes20 + st.availableBikes20E > 0 ? '#ca8a04' : '#dc2626',
-    type: 'youbike',
-  }));
+  const displayStationsForMap = useMemo(() => {
+    if (!focusedStation) return stations;
+    const latest = stations.find((s) => s.stationUid === focusedStation.stationUid);
+    if (latest) return stations;
+    return [focusedStation, ...stations];
+  }, [stations, focusedStation]);
+
+  const markers: MapMarker[] = displayStationsForMap.map((st) => {
+    const totalAvail = st.availableBikes20 + st.availableBikes20E;
+    return {
+      id: st.stationUid,
+      lat: st.lat,
+      lng: st.lng,
+      title: st.stationName,
+      subtitle: `可借: ${totalAvail} 輛 / 可還: ${st.availableReturnDocks} 位 · 總車柱 ${st.totalDocks}<br/>${st.address} · 更新於 ${st.updatedAt}`,
+      badgeText: `🚲 ${totalAvail}`,
+      color: totalAvail > 0 ? '#ca8a04' : '#dc2626',
+      type: 'youbike',
+    };
+  });
 
   return (
     <div className="mx-auto max-w-4xl space-y-5">
@@ -218,8 +227,16 @@ function YouBikePageInner() {
       {viewMode === 'map' ? (
         <div className="space-y-2.5">
           <LeafletMap
-            center={coords ? [coords.lat, coords.lng] : undefined}
+            center={
+              focusedStation
+                ? [focusedStation.lat, focusedStation.lng]
+                : coords
+                  ? [coords.lat, coords.lng]
+                  : undefined
+            }
+            zoom={focusedStation ? 16 : 13}
             markers={markers}
+            focusMarkerId={focusedStation?.stationUid || null}
             heightClass="h-[500px]"
             onBoundsChange={(b) => setMapBounds(b)}
           />
@@ -239,7 +256,10 @@ function YouBikePageInner() {
               <button
                 key={st.stationUid}
                 type="button"
-                onClick={() => setSelectedStation(st)}
+                onClick={() => {
+                  setFocusedStation(st);
+                  setViewMode('map');
+                }}
                 className="transit-card flex w-full flex-col justify-between p-4 text-left transition-colors duration-150 hover:border-slate-900/20 dark:hover:border-slate-100/20"
               >
                 <div>
@@ -357,7 +377,10 @@ function YouBikePageInner() {
                     <li key={st.stationUid}>
                       <button
                         type="button"
-                        onClick={() => setSelectedStation(st)}
+                        onClick={() => {
+                  setFocusedStation(st);
+                  setViewMode('map');
+                }}
                         className="flex w-full items-center justify-between px-3.5 py-2.5 text-left text-sm transition-colors hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]"
                       >
                         <div className="min-w-0">

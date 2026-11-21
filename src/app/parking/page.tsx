@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ExternalLink,
   List,
@@ -51,6 +51,7 @@ function ParkingPageInner() {
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
   const [updatedAt, setUpdatedAt] = useState('');
   const [selectedLot, setSelectedLot] = useState<ParkingLot | null>(null);
+  const [focusedLot, setFocusedLot] = useState<ParkingLot | null>(null);
   const [loading, setLoading] = useState(false);
 
   const loadLots = useCallback(
@@ -134,15 +135,22 @@ function ParkingPageInner() {
     setFrontendUpdatedAt(triggerFrontendRefresh());
   }, [triggerFrontendRefresh]);
 
-  const markers: MapMarker[] = lots.map((lot) => ({
+  const displayLotsForMap = useMemo(() => {
+    if (!focusedLot) return lots;
+    const latest = lots.find((l) => l.carParkId === focusedLot.carParkId);
+    if (latest) return lots;
+    return [focusedLot, ...lots];
+  }, [lots, focusedLot]);
+
+  const markers: MapMarker[] = displayLotsForMap.map((lot) => ({
     id: lot.carParkId,
     lat: lot.lat,
     lng: lot.lng,
     title: lot.name,
     subtitle:
       lot.availableSpaces !== null
-        ? `剩餘 ${lot.availableSpaces} / ${lot.totalSpaces} 位 · ${lot.fareDescription}`
-        : `總車位 ${lot.totalSpaces} 格 · ${lot.fareDescription}`,
+        ? `即時剩餘 ${lot.availableSpaces} / ${lot.totalSpaces} 位<br/>費率：${lot.fareDescription}<br/>${lot.address}`
+        : `總車位 ${lot.totalSpaces} 格<br/>費率：${lot.fareDescription}<br/>${lot.address}`,
     badgeText:
       lot.availableSpaces === null
         ? `P ${lot.totalSpaces}`
@@ -266,8 +274,16 @@ function ParkingPageInner() {
       {viewMode === 'map' ? (
         <div className="space-y-2.5">
           <LeafletMap
-            center={coords ? [coords.lat, coords.lng] : undefined}
+            center={
+              focusedLot
+                ? [focusedLot.lat, focusedLot.lng]
+                : coords
+                  ? [coords.lat, coords.lng]
+                  : undefined
+            }
+            zoom={focusedLot ? 16 : 13}
             markers={markers}
+            focusMarkerId={focusedLot?.carParkId || null}
             heightClass="h-[500px]"
             onBoundsChange={(b) => setMapBounds(b)}
           />
@@ -291,13 +307,17 @@ function ParkingPageInner() {
             return (
               <div
                 key={lot.carParkId}
-                onClick={() => setSelectedLot(lot)}
+                onClick={() => {
+                  setFocusedLot(lot);
+                  setViewMode('map');
+                }}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    setSelectedLot(lot);
+                    setFocusedLot(lot);
+                    setViewMode('map');
                   }
                 }}
                 className="transit-card flex cursor-pointer flex-wrap items-center justify-between gap-4 p-4 transition-colors duration-150 hover:border-slate-900/20 dark:hover:border-slate-100/20"
