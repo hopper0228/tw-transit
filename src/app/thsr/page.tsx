@@ -14,6 +14,11 @@ import {
   findNearestRailStation,
   getThsrStationCoord,
 } from '@/lib/rail-geo';
+import {
+  DepartureWindowMode,
+  filterByDepartureWindow,
+  getDefaultTaipeiHhmm,
+} from '@/lib/rail-time';
 import { LiveRailVehicle, ThsrTrainRow } from '@/lib/types';
 
 const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
@@ -54,6 +59,8 @@ function ThsrPageInner() {
   const [targetStation, setTargetStation] = useState(searchParams.get('to') || '');
   const [trains, setTrains] = useState<ThsrTrainRow[]>([]);
   const [selectedTrain, setSelectedTrain] = useState<ThsrTrainRow | null>(null);
+  const [departureMode, setDepartureMode] = useState<DepartureWindowMode>('now30');
+  const [customTime, setCustomTime] = useState<string>(() => getDefaultTaipeiHhmm());
   const [liveVehicles, setLiveVehicles] = useState<LiveRailVehicle[]>([]);
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
@@ -142,18 +149,19 @@ function ThsrPageInner() {
   const fromName = THSR_STATIONS.find((s) => s.id === from)?.name || from;
   const targetName = THSR_STATIONS.find((s) => s.id === targetStation)?.name || '';
 
-  // 純前端 0ms 依目標站篩選並分流為北上／南下兩欄
+  // 純前端 0ms 依發車時間窗 + 目標站篩選並分流為北上／南下兩欄
   const { northTrains, southTrains } = useMemo(() => {
-    const filtered = targetStation
+    const byTarget = targetStation
       ? trains.filter((t) =>
           t.remainingStops?.some((s) => s.stationId === targetStation)
         )
       : trains;
+    const filtered = filterByDepartureWindow(byTarget, departureMode, customTime, nowMs);
     return {
       northTrains: filtered.filter((t) => t.bound === 'north' || t.direction === 1),
       southTrains: filtered.filter((t) => t.bound === 'south' || t.direction === 0),
     };
-  }, [trains, targetStation]);
+  }, [trains, targetStation, departureMode, customTime, nowMs]);
 
   const thsrMapData = useMemo(() => {
     const stationsWithCoord = THSR_STATIONS.map((s) => {
@@ -275,6 +283,25 @@ function ThsrPageInner() {
               </option>
             ))}
           </select>
+
+          <select
+            value={departureMode}
+            onChange={(e) => setDepartureMode(e.target.value as DepartureWindowMode)}
+            className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+          >
+            <option value="now30">發車：現在起 30 分內</option>
+            <option value="custom30">發車：指定時間（30 分內）</option>
+            <option value="all">發車：今日剩餘全部</option>
+          </select>
+
+          {departureMode === 'custom30' && (
+            <input
+              type="time"
+              value={customTime}
+              onChange={(e) => setCustomTime(e.target.value)}
+              className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+            />
+          )}
 
           <AutoRefreshBadge
             intervalSeconds={30}

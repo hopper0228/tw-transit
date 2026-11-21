@@ -14,6 +14,11 @@ import {
   findNearestRailStation,
   getTraStationCoord,
 } from '@/lib/rail-geo';
+import {
+  DepartureWindowMode,
+  filterByDepartureWindow,
+  getDefaultTaipeiHhmm,
+} from '@/lib/rail-time';
 import { LiveRailVehicle, TraTrainRow } from '@/lib/types';
 
 const LeafletMap = dynamic(() => import('@/components/LeafletMap'), {
@@ -48,6 +53,8 @@ function TraPageInner() {
   const [targetStation, setTargetStation] = useState(searchParams.get('to') || '');
   const [trains, setTrains] = useState<TraTrainRow[]>([]);
   const [selectedTrain, setSelectedTrain] = useState<TraTrainRow | null>(null);
+  const [departureMode, setDepartureMode] = useState<DepartureWindowMode>('now30');
+  const [customTime, setCustomTime] = useState<string>(() => getDefaultTaipeiHhmm());
   const [liveVehicles, setLiveVehicles] = useState<LiveRailVehicle[]>([]);
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
@@ -131,11 +138,13 @@ function TraPageInner() {
   }, [triggerFrontendRefresh]);
 
   const filteredTrains = useMemo(() => {
-    if (!targetStation) return trains;
-    return trains.filter((t) =>
-      t.remainingStops?.some((s) => s.stationId === targetStation)
-    );
-  }, [trains, targetStation]);
+    const byTarget = targetStation
+      ? trains.filter((t) =>
+          t.remainingStops?.some((s) => s.stationId === targetStation)
+        )
+      : trains;
+    return filterByDepartureWindow(byTarget, departureMode, customTime, nowMs);
+  }, [trains, targetStation, departureMode, customTime, nowMs]);
 
   const targetStationName = useMemo(
     () => TRA_STATIONS.find((s) => s.id === targetStation)?.name || '',
@@ -259,6 +268,27 @@ function TraPageInner() {
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-500">發車時間：</span>
+                <select
+                  value={departureMode}
+                  onChange={(e) => setDepartureMode(e.target.value as DepartureWindowMode)}
+                  className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+                >
+                  <option value="now30">現在起 30 分內</option>
+                  <option value="custom30">指定時間（30 分內）</option>
+                  <option value="all">今日剩餘全部</option>
+                </select>
+                {departureMode === 'custom30' && (
+                  <input
+                    type="time"
+                    value={customTime}
+                    onChange={(e) => setCustomTime(e.target.value)}
+                    className="rounded-xl border border-slate-300 bg-slate-50 px-2.5 py-1.5 font-mono text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+                  />
+                )}
               </div>
 
               <div className="flex items-center gap-2">
