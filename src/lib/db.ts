@@ -323,52 +323,44 @@ export async function upsertParkingLotsToDb(
   if (!isDbConfigured() || lots.length === 0) return;
   await ensureStaticTables();
   const sql = getSql();
-  const BATCH = 2000;
-  const chunks: SpatialParkingRow[][] = [];
+  const BATCH = 1000;
   for (let i = 0; i < lots.length; i += BATCH) {
-    chunks.push(lots.slice(i, i + BATCH));
-  }
-  const CONCURRENCY = 2;
-  for (let i = 0; i < chunks.length; i += CONCURRENCY) {
-    await Promise.all(
-      chunks.slice(i, i + CONCURRENCY).map(async (chunk) => {
-        const ids = chunk.map((l) => l.carParkId);
-        const cities = chunk.map((l) => l.city);
-        const names = chunk.map((l) => l.name);
-        const addrs = chunk.map((l) => l.address);
-        const lats = chunk.map((l) => l.lat);
-        const lngs = chunk.map((l) => l.lng);
-        const totals = chunk.map((l) => Math.max(0, Math.round(l.totalSpaces || 0)));
-        const fares = chunk.map((l) => l.fareDescription || '依現場公告');
-        const types = chunk.map((l) => l.parkingType || '立體');
-        const labels = chunk.map((l) => l.updatedAt || '依現場為準');
-        const dates = chunk.map(() => serviceDate);
+    const chunk = lots.slice(i, i + BATCH);
+    const ids = chunk.map((l) => l.carParkId);
+    const cities = chunk.map((l) => l.city);
+    const names = chunk.map((l) => l.name);
+    const addrs = chunk.map((l) => l.address);
+    const lats = chunk.map((l) => l.lat);
+    const lngs = chunk.map((l) => l.lng);
+    const totals = chunk.map((l) => Math.max(0, Math.round(l.totalSpaces || 0)));
+    const fares = chunk.map((l) => l.fareDescription || '依現場公告');
+    const types = chunk.map((l) => l.parkingType || '立體');
+    const labels = chunk.map((l) => l.updatedAt || '依現場為準');
+    const dates = chunk.map(() => serviceDate);
 
-        await sql`
-          INSERT INTO parking_lots_static (
-            car_park_id, city, name, address, lat, lng,
-            total_spaces, fare_description, parking_type, updated_at_label, service_date
-          )
-          SELECT id, c, n, a, la, ln, tot, f, tp, lb, d
-          FROM UNNEST(
-            ${ids}::text[], ${cities}::text[], ${names}::text[], ${addrs}::text[],
-            ${lats}::double precision[], ${lngs}::double precision[],
-            ${totals}::int[], ${fares}::text[], ${types}::text[], ${labels}::text[], ${dates}::text[]
-          ) AS t(id, c, n, a, la, ln, tot, f, tp, lb, d)
-          ON CONFLICT (car_park_id) DO UPDATE SET
-            city = EXCLUDED.city,
-            name = EXCLUDED.name,
-            address = EXCLUDED.address,
-            lat = EXCLUDED.lat,
-            lng = EXCLUDED.lng,
-            total_spaces = EXCLUDED.total_spaces,
-            fare_description = EXCLUDED.fare_description,
-            parking_type = EXCLUDED.parking_type,
-            updated_at_label = EXCLUDED.updated_at_label,
-            service_date = EXCLUDED.service_date
-        `;
-      })
-    );
+    await sql`
+      INSERT INTO parking_lots_static (
+        car_park_id, city, name, address, lat, lng,
+        total_spaces, fare_description, parking_type, updated_at_label, service_date
+      )
+      SELECT id, c, n, a, la, ln, tot, f, tp, lb, d
+      FROM UNNEST(
+        ${ids}::text[], ${cities}::text[], ${names}::text[], ${addrs}::text[],
+        ${lats}::double precision[], ${lngs}::double precision[],
+        ${totals}::int[], ${fares}::text[], ${types}::text[], ${labels}::text[], ${dates}::text[]
+      ) AS t(id, c, n, a, la, ln, tot, f, tp, lb, d)
+      ON CONFLICT (car_park_id) DO UPDATE SET
+        city = EXCLUDED.city,
+        name = EXCLUDED.name,
+        address = EXCLUDED.address,
+        lat = EXCLUDED.lat,
+        lng = EXCLUDED.lng,
+        total_spaces = EXCLUDED.total_spaces,
+        fare_description = EXCLUDED.fare_description,
+        parking_type = EXCLUDED.parking_type,
+        updated_at_label = EXCLUDED.updated_at_label,
+        service_date = EXCLUDED.service_date
+    `;
   }
 }
 

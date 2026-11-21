@@ -21,7 +21,8 @@ export async function GET(req: NextRequest) {
   try {
     const group = req.nextUrl.searchParams.get('group') || 'all';
     const batchRaw = Number(req.nextUrl.searchParams.get('batch'));
-    const batch = batchRaw === 1 || batchRaw === 2 ? batchRaw : undefined;
+    const batch =
+      batchRaw === 1 || batchRaw === 2 || batchRaw === 3 ? batchRaw : undefined;
     const [rail, metro, opendata, tdxBike, tdxParking] = await Promise.all([
       group === 'all' || group === 'rail'
         ? syncRailStaticToDb()
