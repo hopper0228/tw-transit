@@ -396,29 +396,38 @@ function ThsrPageInner() {
           </p>
         </div>
 
-        <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
-          <button
-            onClick={() => setViewMode('list')}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-              viewMode === 'list'
-                ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
-                : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            <List className="h-3.5 w-3.5" />
-            時刻表
-          </button>
-          <button
-            onClick={() => setViewMode('map')}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-              viewMode === 'map'
-                ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
-                : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            <MapIcon className="h-3.5 w-3.5" />
-            路線地圖
-          </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <AutoRefreshBadge
+            intervalSeconds={30}
+            onRefresh={handleBackgroundRefresh}
+            onManualRefresh={handleManualFrontendRefresh}
+            isRefreshing={loading}
+            lastUpdated={frontendUpdatedAt || updatedAt}
+          />
+          <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+            <button
+              onClick={() => setViewMode('list')}
+              className={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                viewMode === 'list'
+                  ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <List className="h-3.5 w-3.5" />
+              列表
+            </button>
+            <button
+              onClick={() => setViewMode('map')}
+              className={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                viewMode === 'map'
+                  ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <MapIcon className="h-3.5 w-3.5" />
+              地圖
+            </button>
+          </div>
         </div>
       </div>
 
@@ -481,16 +490,6 @@ function ThsrPageInner() {
               ))}
             </select>
             <span className="text-xs text-[#6b7487] dark:text-[#7a8296]">後 1 小時</span>
-          </div>
-
-          <div className="ml-auto">
-            <AutoRefreshBadge
-              intervalSeconds={30}
-              onRefresh={handleBackgroundRefresh}
-              onManualRefresh={handleManualFrontendRefresh}
-              isRefreshing={loading}
-              lastUpdated={frontendUpdatedAt || updatedAt}
-            />
           </div>
         </div>
       </div>

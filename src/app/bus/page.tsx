@@ -249,7 +249,7 @@ function BusPageInner() {
       : [];
 
     return (
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="mx-auto max-w-4xl space-y-4">
         {/* Sticky 頂部控制列 */}
         <div className="sticky top-14 z-30 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/95">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -538,7 +538,7 @@ function BusPageInner() {
   // ==========================================
   return (
     <div className="mx-auto max-w-4xl space-y-5">
-      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-white">
             <Bus className="h-6 w-6 text-blue-600" />
@@ -547,6 +547,15 @@ function BusPageInner() {
           <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
             支援垂直列表（台北等公車）與地圖雙模式即時動態
           </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <AutoRefreshBadge
+            intervalSeconds={30}
+            onManualRefresh={handleManualFrontendRefresh}
+            isRefreshing={loadingList}
+            lastUpdated={frontendUpdatedAt}
+          />
         </div>
       </div>
 

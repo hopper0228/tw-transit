@@ -381,6 +381,13 @@ function TraPageInner() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <AutoRefreshBadge
+            intervalSeconds={30}
+            onRefresh={handleBackgroundRefresh}
+            onManualRefresh={handleManualFrontendRefresh}
+            isRefreshing={loading}
+            lastUpdated={frontendUpdatedAt || updatedAt}
+          />
           {/* 列表 / 地圖切換 */}
           <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
             <button
@@ -489,13 +496,6 @@ function TraPageInner() {
                 )}
               </div>
             </div>
-            <AutoRefreshBadge
-              intervalSeconds={30}
-              onRefresh={handleBackgroundRefresh}
-              onManualRefresh={handleManualFrontendRefresh}
-              isRefreshing={loading}
-              lastUpdated={frontendUpdatedAt || updatedAt}
-            />
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] font-semibold text-slate-400">熱門：</span>
