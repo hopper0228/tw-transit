@@ -1292,55 +1292,95 @@ export async function getRealThsrData(
   }
 }
 
+type ThsrStopRow = {
+  stationId: string;
+  stationName: string;
+  arrivalTime: string;
+  departureTime: string;
+  standardSeatStatus?: 'available' | 'limited' | 'full';
+  businessSeatStatus?: 'available' | 'limited' | 'full';
+};
+
+function buildThsrTrainStops(
+  stopTimes: NonNullable<TdxThsrDaily['StopTimes']>,
+  seatRow: NonNullable<TdxThsrSeatList['AvailableSeats']>[number] | undefined,
+  from: string
+): ThsrStopRow[] {
+  const seatByStop = new Map<
+    string,
+    { std: 'available' | 'limited' | 'full'; biz: 'available' | 'limited' | 'full' }
+  >();
+  for (const st of seatRow?.StopStations || []) {
+    seatByStop.set(st.StationID, {
+      std: mapSeatCode(st.StandardSeatStatus),
+      biz: mapSeatCode(st.BusinessSeatStatus),
+    });
+  }
+
+  const fromIdx = stopTimes.findIndex((s) => s.StationID === from);
+  return stopTimes.map((st, idx) => {
+    const stSeats = idx > fromIdx ? seatByStop.get(st.StationID) : undefined;
+    return {
+      stationId: st.StationID,
+      stationName: st.StationName?.Zh_tw || st.StationID,
+      arrivalTime: (st.ArrivalTime || st.DepartureTime || '--:--').slice(0, 5),
+      departureTime: (st.DepartureTime || st.ArrivalTime || '--:--').slice(0, 5),
+      standardSeatStatus: stSeats?.std,
+      businessSeatStatus: stSeats?.biz,
+    };
+  });
+}
+
 /**
  * 依車次編號取得單一高鐵列車完整停靠站與從出發站起之各站餘位
  */
-export async function getThsrTrainStops(from: string, trainNo: string) {
-  if (!isTdxConfigured()) return [];
+export async function getThsrTrainStops(from: string, trainNo: string): Promise<ThsrStopRow[]> {
+  const batch = await getThsrTrainsStops(from, [trainNo]);
+  return batch[trainNo] || [];
+}
+
+/**
+ * 批次取得多班高鐵列車完整停靠站與從出發站起之各站餘位（只抓取一次時刻表與餘位）
+ */
+export async function getThsrTrainsStops(
+  from: string,
+  trainNos: string[]
+): Promise<Record<string, ThsrStopRow[]>> {
+  const uniqueNos = Array.from(new Set(trainNos.map((n) => n.trim()).filter(Boolean)));
+  if (!isTdxConfigured() || uniqueNos.length === 0) return {};
   try {
-    const daily = await fetchTdx<TdxThsrDaily[]>(
-      '/v2/Rail/THSR/DailyTimetable/Today?%24format=JSON',
-      3600,
-      true
-    );
-    const item = (Array.isArray(daily) ? daily : []).find(
-      (d) => d.DailyTrainInfo?.TrainNo === trainNo
-    );
-    if (!item?.StopTimes) return [];
+    const [daily, seatData] = await Promise.all([
+      fetchTdx<TdxThsrDaily[]>(
+        '/v2/Rail/THSR/DailyTimetable/Today?%24format=JSON',
+        3600,
+        true
+      ),
+      fetchTdx<TdxThsrSeatList>(
+        `/v2/Rail/THSR/AvailableSeatStatusList/${encodeURIComponent(from)}?%24format=JSON`,
+        60
+      ).catch(() => ({ AvailableSeats: [] })),
+    ]);
 
-    const seatData = await fetchTdx<TdxThsrSeatList>(
-      `/v2/Rail/THSR/AvailableSeatStatusList/${encodeURIComponent(from)}?%24format=JSON`,
-      60
-    ).catch(() => ({ AvailableSeats: [] }));
-
-    const seatRow = (seatData?.AvailableSeats || []).find(
-      (s) => s.TrainNo === trainNo
-    );
-    const seatByStop = new Map<
-      string,
-      { std: 'available' | 'limited' | 'full'; biz: 'available' | 'limited' | 'full' }
-    >();
-    for (const st of seatRow?.StopStations || []) {
-      seatByStop.set(st.StationID, {
-        std: mapSeatCode(st.StandardSeatStatus),
-        biz: mapSeatCode(st.BusinessSeatStatus),
-      });
+    const dailyByNo = new Map<string, NonNullable<TdxThsrDaily['StopTimes']>>();
+    for (const d of Array.isArray(daily) ? daily : []) {
+      const no = d.DailyTrainInfo?.TrainNo;
+      if (no && d.StopTimes) dailyByNo.set(no, d.StopTimes);
     }
 
-    const fromIdx = item.StopTimes.findIndex((s) => s.StationID === from);
-    return item.StopTimes.map((st, idx) => {
-      const stSeats = idx > fromIdx ? seatByStop.get(st.StationID) : undefined;
-      return {
-        stationId: st.StationID,
-        stationName: st.StationName?.Zh_tw || st.StationID,
-        arrivalTime: (st.ArrivalTime || st.DepartureTime || '--:--').slice(0, 5),
-        departureTime: (st.DepartureTime || st.ArrivalTime || '--:--').slice(0, 5),
-        standardSeatStatus: stSeats?.std,
-        businessSeatStatus: stSeats?.biz,
-      };
-    });
+    const seatByNo = new Map<string, NonNullable<TdxThsrSeatList['AvailableSeats']>[number]>();
+    for (const s of seatData?.AvailableSeats || []) {
+      if (s.TrainNo) seatByNo.set(s.TrainNo, s);
+    }
+
+    const result: Record<string, ThsrStopRow[]> = {};
+    for (const trainNo of uniqueNos) {
+      const stopTimes = dailyByNo.get(trainNo);
+      if (!stopTimes) continue;
+      result[trainNo] = buildThsrTrainStops(stopTimes, seatByNo.get(trainNo), from);
+    }
+    return result;
   } catch {
-    return [];
+    return {};
   }
 }
 
@@ -1352,4 +1392,26 @@ export async function getTraTrainStops(trainNo: string): Promise<TraStopTime[]> 
   const { dateStr } = getTaipeiNow();
   const index = await getTraDailyIndex(dateStr);
   return index?.trainByNo.get(trainNo)?.stops || [];
+}
+
+/**
+ * 批次取得多班台鐵列車完整停靠站時刻表（直接讀取已快取之當日索引）
+ */
+export async function getTraTrainsStops(
+  trainNos: string[]
+): Promise<Record<string, TraStopTime[]>> {
+  const uniqueNos = Array.from(new Set(trainNos.map((n) => n.trim()).filter(Boolean)));
+  if (!isTdxConfigured() || uniqueNos.length === 0) return {};
+  const { dateStr } = getTaipeiNow();
+  const index = await getTraDailyIndex(dateStr);
+  if (!index) return {};
+
+  const result: Record<string, TraStopTime[]> = {};
+  for (const trainNo of uniqueNos) {
+    const stops = index.trainByNo.get(trainNo)?.stops;
+    if (stops && stops.length > 0) {
+      result[trainNo] = stops;
+    }
+  }
+  return result;
 }

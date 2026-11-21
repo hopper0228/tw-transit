@@ -1,11 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { THSR_STATIONS } from '@/lib/mock-data';
-import { getRealThsrData, getThsrTrainStops } from '@/lib/rail-live';
+import { getRealThsrData, getThsrTrainStops, getThsrTrainsStops } from '@/lib/rail-live';
 
 export async function GET(req: NextRequest) {
   const modeParam = req.nextUrl.searchParams.get('mode');
   const from = req.nextUrl.searchParams.get('from') || '1000';
   const trainNo = req.nextUrl.searchParams.get('trainNo') || '';
+
+  if (modeParam === 'trains') {
+    const rawNos = req.nextUrl.searchParams.get('trainNos') || '';
+    const trainNos = rawNos
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 60);
+    const stopsByTrain = await getThsrTrainsStops(from, trainNos);
+    const cacheHeader =
+      Object.keys(stopsByTrain).length > 0
+        ? 'public, s-maxage=60, stale-while-revalidate=120'
+        : 'no-store, max-age=0';
+    return NextResponse.json(
+      { stopsByTrain },
+      { headers: { 'Cache-Control': cacheHeader } }
+    );
+  }
 
   if (modeParam === 'train' && trainNo) {
     const fullStops = await getThsrTrainStops(from, trainNo);

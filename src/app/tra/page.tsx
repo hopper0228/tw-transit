@@ -57,6 +57,9 @@ function TraPageInner() {
   const [selectedTrain, setSelectedTrain] = useState<TraTrainRow | null>(null);
   const [selectedStops, setSelectedStops] = useState<TraStopTime[]>([]);
   const [loadingStops, setLoadingStops] = useState(false);
+  const [preloadedStops, setPreloadedStops] = useState<Record<string, TraStopTime[]>>({});
+  const preloadedStopsRef = useRef<Record<string, TraStopTime[]>>({});
+  const inFlightStopsRef = useRef<Set<string>>(new Set());
   const [customHour, setCustomHour] = useState<string>(
     () => getDefaultTaipeiHourMinute15().hour
   );
@@ -154,6 +157,14 @@ function TraPageInner() {
       }, 0);
       return () => clearTimeout(t);
     }
+    const preloaded = preloadedStops[selectedTrain.trainNo];
+    if (preloaded && preloaded.length > 0) {
+      const t = setTimeout(() => {
+        setSelectedStops(preloaded);
+        setLoadingStops(false);
+      }, 0);
+      return () => clearTimeout(t);
+    }
     const key = `tra:train:${selectedTrain.trainNo}`;
     const cached = getCached<{ fullStops?: TraStopTime[] }>(key);
     if (cached?.data?.fullStops?.length) {
@@ -168,6 +179,7 @@ function TraPageInner() {
     const startTimer = setTimeout(() => {
       setLoadingStops(true);
       setSelectedStops([]);
+      if (inFlightStopsRef.current.has(selectedTrain.trainNo)) return;
       void fetchWithCache<{ fullStops?: TraStopTime[] }>(
         key,
         `/api/transit/tra?mode=train&trainNo=${encodeURIComponent(selectedTrain.trainNo)}`,
@@ -181,7 +193,7 @@ function TraPageInner() {
       clearTimeout(startTimer);
       controller.abort();
     };
-  }, [selectedTrain, getCached, fetchWithCache]);
+  }, [selectedTrain, preloadedStops, getCached, fetchWithCache]);
 
   const filteredTrains = useMemo(() => {
     const byTarget = targetStation
@@ -191,6 +203,55 @@ function TraPageInner() {
       : trains;
     return filterByDepartureWindow(byTarget, customHour, customMinute);
   }, [trains, targetStation, customHour, customMinute]);
+
+  // 畫面顯示哪些班次，就立即在背景批次預載這些班次的完整停靠站，點擊時 0ms 立即呈現
+  useEffect(() => {
+    const missing = Array.from(
+      new Set(
+        filteredTrains
+          .map((t) => t.trainNo)
+          .filter(
+            (no) =>
+              no &&
+              !preloadedStopsRef.current[no] &&
+              !inFlightStopsRef.current.has(no) &&
+              !getCached<{ fullStops?: TraStopTime[] }>(`tra:train:${no}`)?.data?.fullStops?.length
+          )
+      )
+    ).sort();
+    if (missing.length === 0) return;
+
+    const chunks: string[][] = [];
+    for (let i = 0; i < missing.length; i += 50) {
+      chunks.push(missing.slice(i, i + 50));
+    }
+
+    const controller = new AbortController();
+    for (const chunk of chunks) {
+      for (const no of chunk) inFlightStopsRef.current.add(no);
+      const batchKey = `tra:trains:${chunk.join(',')}`;
+      void fetchWithCache<{ stopsByTrain?: Record<string, TraStopTime[]> }>(
+        batchKey,
+        `/api/transit/tra?mode=trains&trainNos=${encodeURIComponent(chunk.join(','))}`,
+        { signal: controller.signal }
+      )
+        .then((res) => {
+          if (res?.stopsByTrain && Object.keys(res.stopsByTrain).length > 0) {
+            preloadedStopsRef.current = { ...preloadedStopsRef.current, ...res.stopsByTrain };
+            setPreloadedStops((prev) => ({ ...prev, ...res.stopsByTrain }));
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          for (const no of chunk) inFlightStopsRef.current.delete(no);
+        });
+    }
+
+    return () => {
+      controller.abort();
+      for (const no of missing) inFlightStopsRef.current.delete(no);
+    };
+  }, [filteredTrains, getCached, fetchWithCache]);
 
   const targetStationName = useMemo(
     () => TRA_STATIONS.find((s) => s.id === targetStation)?.name || '',

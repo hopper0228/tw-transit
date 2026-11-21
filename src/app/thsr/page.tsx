@@ -63,6 +63,13 @@ function ThsrPageInner() {
   const [selectedTrain, setSelectedTrain] = useState<ThsrTrainRow | null>(null);
   const [selectedStops, setSelectedStops] = useState<NonNullable<ThsrTrainRow['fullStops']>>([]);
   const [loadingStops, setLoadingStops] = useState(false);
+  const [preloadedStops, setPreloadedStops] = useState<
+    Record<string, NonNullable<ThsrTrainRow['fullStops']>>
+  >({});
+  const preloadedStopsRef = useRef<
+    Record<string, NonNullable<ThsrTrainRow['fullStops']>>
+  >({});
+  const inFlightStopsRef = useRef<Set<string>>(new Set());
   const [customHour, setCustomHour] = useState<string>(
     () => getDefaultTaipeiHourMinute15().hour
   );
@@ -163,6 +170,15 @@ function ThsrPageInner() {
       }, 0);
       return () => clearTimeout(t);
     }
+    const cacheId = `${from}:${selectedTrain.trainNo}`;
+    const preloaded = preloadedStops[cacheId];
+    if (preloaded && preloaded.length > 0) {
+      const t = setTimeout(() => {
+        setSelectedStops(preloaded);
+        setLoadingStops(false);
+      }, 0);
+      return () => clearTimeout(t);
+    }
     const key = `thsr:train:${from}:${selectedTrain.trainNo}`;
     const cached = getCached<{ fullStops?: ThsrTrainRow['fullStops'] }>(key);
     if (cached?.data?.fullStops?.length) {
@@ -177,6 +193,7 @@ function ThsrPageInner() {
     const startTimer = setTimeout(() => {
       setLoadingStops(true);
       setSelectedStops([]);
+      if (inFlightStopsRef.current.has(cacheId)) return;
       void fetchWithCache<{ fullStops?: ThsrTrainRow['fullStops'] }>(
         key,
         `/api/transit/thsr?mode=train&from=${encodeURIComponent(from)}&trainNo=${encodeURIComponent(selectedTrain.trainNo)}`,
@@ -190,7 +207,7 @@ function ThsrPageInner() {
       clearTimeout(startTimer);
       controller.abort();
     };
-  }, [selectedTrain, from, getCached, fetchWithCache]);
+  }, [selectedTrain, from, preloadedStops, getCached, fetchWithCache]);
 
   const fromName = THSR_STATIONS.find((s) => s.id === from)?.name || from;
   const targetName = THSR_STATIONS.find((s) => s.id === targetStation)?.name || '';
@@ -208,6 +225,63 @@ function ThsrPageInner() {
       southTrains: filtered.filter((t) => t.bound === 'south' || t.direction === 0),
     };
   }, [trains, targetStation, customHour, customMinute]);
+
+  // 畫面顯示哪些班次，就立即在背景批次預載這些班次的完整停靠站與餘位，點擊時 0ms 立即呈現
+  useEffect(() => {
+    const visibleNos = [...northTrains, ...southTrains].map((t) => t.trainNo);
+    const missing = Array.from(
+      new Set(
+        visibleNos.filter((no) => {
+          if (!no) return false;
+          const cacheId = `${from}:${no}`;
+          return (
+            !preloadedStopsRef.current[cacheId] &&
+            !inFlightStopsRef.current.has(cacheId) &&
+            !getCached<{ fullStops?: ThsrTrainRow['fullStops'] }>(`thsr:train:${from}:${no}`)
+              ?.data?.fullStops?.length
+          );
+        })
+      )
+    ).sort();
+    if (missing.length === 0) return;
+
+    const chunks: string[][] = [];
+    for (let i = 0; i < missing.length; i += 50) {
+      chunks.push(missing.slice(i, i + 50));
+    }
+
+    const controller = new AbortController();
+    for (const chunk of chunks) {
+      for (const no of chunk) inFlightStopsRef.current.add(`${from}:${no}`);
+      const batchKey = `thsr:trains:${from}:${chunk.join(',')}`;
+      void fetchWithCache<{
+        stopsByTrain?: Record<string, NonNullable<ThsrTrainRow['fullStops']>>;
+      }>(
+        batchKey,
+        `/api/transit/thsr?mode=trains&from=${encodeURIComponent(from)}&trainNos=${encodeURIComponent(chunk.join(','))}`,
+        { signal: controller.signal }
+      )
+        .then((res) => {
+          if (res?.stopsByTrain && Object.keys(res.stopsByTrain).length > 0) {
+            const mapped: Record<string, NonNullable<ThsrTrainRow['fullStops']>> = {};
+            for (const [no, stops] of Object.entries(res.stopsByTrain)) {
+              mapped[`${from}:${no}`] = stops;
+            }
+            preloadedStopsRef.current = { ...preloadedStopsRef.current, ...mapped };
+            setPreloadedStops((prev) => ({ ...prev, ...mapped }));
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          for (const no of chunk) inFlightStopsRef.current.delete(`${from}:${no}`);
+        });
+    }
+
+    return () => {
+      controller.abort();
+      for (const no of missing) inFlightStopsRef.current.delete(`${from}:${no}`);
+    };
+  }, [northTrains, southTrains, from, getCached, fetchWithCache]);
 
   const thsrMapData = useMemo(() => {
     const stationsWithCoord = THSR_STATIONS.map((s) => {
