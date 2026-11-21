@@ -7,6 +7,8 @@ import {
   Accessibility,
   ArrowLeft,
   Bus,
+  ChevronRight,
+  ExternalLink,
   Keyboard,
   List,
   Map as MapIcon,
@@ -15,6 +17,7 @@ import {
   Zap,
 } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
+import DetailDrawer from '@/components/DetailDrawer';
 import LocationBanner from '@/components/LocationBanner';
 import { formatDistance, useUserLocation } from '@/lib/location';
 import { useTransitStore } from '@/lib/transit-store';
@@ -94,6 +97,7 @@ function BusPageInner() {
   const [detail, setDetail] = useState<BusRouteDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [faved, setFaved] = useState(false);
+  const [selectedStop, setSelectedStop] = useState<BusStopStatus | null>(null);
 
   // 取得路線清單（立即載入預設/快取，定位取得後自動背景依距離重排）
   useEffect(() => {
@@ -387,10 +391,12 @@ function BusPageInner() {
                 const isLast = idx === detail.stops.length - 1;
 
                 return (
-                  <li
-                    key={stop.stopUid}
-                    className="flex items-center justify-between px-4 py-3 transition hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
-                  >
+                  <li key={stop.stopUid}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedStop(stop)}
+                      className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors duration-150 hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]"
+                    >
                     {/* 左側：時間狀態膠囊 + 站序軸線 + 站名 */}
                     <div className="flex min-w-0 items-center gap-3.5">
                       <span
@@ -427,35 +433,104 @@ function BusPageInner() {
                     </div>
 
                     {/* 右側：車牌與電動/低地板標籤 */}
-                    {stop.approachingBus && (
-                      <div className="ml-2 flex shrink-0 items-center gap-1.5">
-                        {stop.approachingBus.isElectric && (
-                          <span
-                            title="電動公車"
-                            className="rounded bg-emerald-50 p-1 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400"
-                          >
-                            <Zap className="h-3 w-3" />
+                    <div className="ml-2 flex shrink-0 items-center gap-1.5">
+                      {stop.approachingBus && (
+                        <>
+                          {stop.approachingBus.isElectric && (
+                            <span
+                              title="電動公車"
+                              className="rounded bg-emerald-50 p-1 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400"
+                            >
+                              <Zap className="h-3 w-3" />
+                            </span>
+                          )}
+                          {stop.approachingBus.isLowFloor && (
+                            <span
+                              title="低地板無障礙公車"
+                              className="rounded bg-blue-50 p-1 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400"
+                            >
+                              <Accessibility className="h-3 w-3" />
+                            </span>
+                          )}
+                          <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                            {stop.approachingBus.plateNumb}
                           </span>
-                        )}
-                        {stop.approachingBus.isLowFloor && (
-                          <span
-                            title="低地板無障礙公車"
-                            className="rounded bg-blue-50 p-1 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400"
-                          >
-                            <Accessibility className="h-3 w-3" />
-                          </span>
-                        )}
-                        <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                          {stop.approachingBus.plateNumb}
-                        </span>
-                      </div>
-                    )}
+                        </>
+                      )}
+                      <ChevronRight className="h-4 w-4 text-[#6b7487] dark:text-[#7a8296]" strokeWidth={1.5} />
+                    </div>
+                  </button>
                   </li>
                 );
               })}
             </ul>
           </div>
         )}
+
+        <DetailDrawer
+          open={Boolean(selectedStop && detail)}
+          onClose={() => setSelectedStop(null)}
+          badge={selectedStop && detail ? `${detail.route.routeName} · 第 ${selectedStop.sequence} 站` : undefined}
+          title={selectedStop?.stopName || ''}
+          subtitle={detail ? `${detail.direction === 0 ? '去程' : '返程'} · ${detail.headsign}` : undefined}
+        >
+          {selectedStop && detail && (
+            <div className="space-y-5">
+              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] p-4 dark:border-slate-100/8 dark:bg-[#1a1e28]">
+                <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">預估到站狀態</div>
+                <div className="mt-1 font-mono text-2xl font-medium tabular-nums">
+                  {formatEtaBadge(
+                    selectedStop,
+                    nowMs > 0 && (detail.sourceUpdatedAt || detailFetchedAt) > 0
+                      ? Math.max(
+                          0,
+                          Math.floor((nowMs - (detail.sourceUpdatedAt || detailFetchedAt)) / 1000)
+                        )
+                      : 0
+                  ).text}
+                </div>
+              </div>
+
+              {selectedStop.approachingBus && (
+                <div className="rounded-lg border border-slate-900/8 p-4 dark:border-slate-100/8">
+                  <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">進站車輛資訊</div>
+                  <div className="mt-1.5 flex items-center justify-between">
+                    <span className="font-mono text-base font-medium">
+                      {selectedStop.approachingBus.plateNumb}
+                    </span>
+                    <span className="text-xs text-[#4b5565] dark:text-[#a3a9b8]">
+                      {selectedStop.approachingBus.atStop ? '正停靠本站' : '行駛接近中'}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                    {selectedStop.approachingBus.isLowFloor && (
+                      <span className="rounded-md bg-[#eceff4] px-2 py-0.5 dark:bg-[#1a1e28]">
+                        低地板無障礙公車
+                      </span>
+                    )}
+                    {selectedStop.approachingBus.isElectric && (
+                      <span className="rounded-md bg-[#eceff4] px-2 py-0.5 dark:bg-[#1a1e28]">
+                        電動公車
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {selectedStop.lat !== 0 && selectedStop.lng !== 0 && (
+                <a
+                  href={`https://www.google.com/maps/dir/?api=1&destination=${selectedStop.lat},${selectedStop.lng}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#0f4c81] px-4 py-2.5 text-sm font-medium text-white transition-colors duration-150 hover:opacity-90 dark:bg-slate-100 dark:text-[#0b0d14]"
+                >
+                  導航至站牌位置
+                  <ExternalLink className="h-4 w-4" strokeWidth={1.5} />
+                </a>
+              )}
+            </div>
+          )}
+        </DetailDrawer>
       </div>
     );
   }

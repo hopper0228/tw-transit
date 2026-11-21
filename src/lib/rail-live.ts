@@ -668,6 +668,10 @@ interface TdxTraDailyTimetableItem {
     StartingStationName?: { Zh_tw?: string };
     EndingStationName?: { Zh_tw?: string };
     SuspendedFlag?: number;
+    WheelchairFlag?: number;
+    BikeFlag?: number;
+    BreastFeedingFlag?: number;
+    Note?: string;
   };
   StopTimes: {
     StopSequence: number;
@@ -695,6 +699,10 @@ interface CompactTraTrain {
   trainNo: string;
   trainType: TraTrainRow['trainType'];
   direction: 0 | 1;
+  note?: string;
+  wheelchairFlag?: boolean;
+  bikeFlag?: boolean;
+  breastFeedingFlag?: boolean;
   stops: {
     stationId: string;
     stationName: string;
@@ -708,6 +716,7 @@ interface TraDailyIndex {
   expiresAt: number;
   byStation: Map<string, CompactTraBoardStop[]>;
   trains: CompactTraTrain[];
+  trainByNo: Map<string, CompactTraTrain>;
 }
 
 let traDailyIndexCache: TraDailyIndex | null = null;
@@ -736,6 +745,7 @@ async function getTraDailyIndex(dateStr: string): Promise<TraDailyIndex | null> 
 
       const byStation = new Map<string, CompactTraBoardStop[]>();
       const trains: CompactTraTrain[] = [];
+      const trainByNo = new Map<string, CompactTraTrain>();
 
       for (const item of list) {
         if (item.TrainInfo?.SuspendedFlag === 1) continue;
@@ -762,12 +772,18 @@ async function getTraDailyIndex(dateStr: string): Promise<TraDailyIndex | null> 
           departureTime: (s.DepartureTime || s.ArrivalTime || '--:--').slice(0, 5),
         }));
 
-        trains.push({
+        const trainEntry: CompactTraTrain = {
           trainNo,
           trainType,
           direction,
+          note: item.TrainInfo.Note?.trim() || undefined,
+          wheelchairFlag: item.TrainInfo.WheelchairFlag === 1,
+          bikeFlag: item.TrainInfo.BikeFlag === 1,
+          breastFeedingFlag: item.TrainInfo.BreastFeedingFlag === 1,
           stops: mappedStops,
-        });
+        };
+        trains.push(trainEntry);
+        trainByNo.set(trainNo, trainEntry);
 
         for (let idx = 0; idx < mappedStops.length; idx++) {
           const s = mappedStops[idx];
@@ -805,6 +821,7 @@ async function getTraDailyIndex(dateStr: string): Promise<TraDailyIndex | null> 
         expiresAt: Date.now() + 4 * 60 * 60 * 1000,
         byStation,
         trains,
+        trainByNo,
       };
       return traDailyIndexCache;
     } catch {
@@ -882,20 +899,25 @@ export async function getRealTraData(
   const index = dailyIndex.status === 'fulfilled' ? dailyIndex.value : null;
 
   const delayMap = new Map<string, number>();
+  const liveLocMap = new Map<string, string>();
   const liveVehicles: LiveRailVehicle[] = [];
 
   for (const item of liveList) {
     delayMap.set(item.TrainNo, item.DelayTime ?? 0);
-    const coord = getTraStationCoord(item.StationID);
-    if (!coord) continue;
-    const tType = normalizeTraType(item.TrainTypeName?.Zh_tw);
-    const delay = item.DelayTime ?? 0;
     const statusLabel =
       item.TrainStationStatus === 0
         ? '進站中'
         : item.TrainStationStatus === 1
           ? '停靠中'
           : '已離站行駛中';
+    liveLocMap.set(
+      item.TrainNo,
+      `${item.StationName?.Zh_tw || item.StationID}（${statusLabel}）`
+    );
+    const coord = getTraStationCoord(item.StationID);
+    if (!coord) continue;
+    const tType = normalizeTraType(item.TrainTypeName?.Zh_tw);
+    const delay = item.DelayTime ?? 0;
     const color =
       tType === '新自強' || tType === '普悠瑪' || tType === '太魯閣'
         ? '#e11d48'
@@ -926,6 +948,7 @@ export async function getRealTraData(
       const chosen = (upcoming.length > 0 ? upcoming : boundAll).slice(0, 24);
       return chosen.map((s) => {
         const delay = delayMap.get(s.trainNo) ?? 0;
+        const meta = index?.trainByNo.get(s.trainNo);
         return {
           trainNo: s.trainNo,
           trainType: s.trainType,
@@ -938,7 +961,13 @@ export async function getRealTraData(
           durationMinutes: 0,
           delayMinutes: delay,
           statusText: delay > 0 ? `晚 ${delay} 分` : '準點',
+          currentLocation: liveLocMap.get(s.trainNo),
+          note: meta?.note,
+          wheelchairFlag: meta?.wheelchairFlag,
+          bikeFlag: meta?.bikeFlag,
+          breastFeedingFlag: meta?.breastFeedingFlag,
           remainingStops: s.remainingStops,
+          fullStops: meta?.stops,
         };
       });
     };
@@ -1207,6 +1236,20 @@ export async function getRealThsrData(
             businessSeatStatus: stSeats?.biz ?? 'available',
           };
         });
+        const fullStops = stops.map((st, idx) => {
+          const stSeats = idx > fromIdx ? trainSeatMap?.get(st.StationID) : undefined;
+          return {
+            stationId: st.StationID,
+            stationName: st.StationName?.Zh_tw || st.StationID,
+            arrivalTime: (st.ArrivalTime || st.DepartureTime || '--:--').slice(0, 5),
+            departureTime: (st.DepartureTime || st.ArrivalTime || '--:--').slice(0, 5),
+            standardSeatStatus: stSeats?.std,
+            businessSeatStatus: stSeats?.biz,
+          };
+        });
+        const liveMatch = liveVehicles.find(
+          (v) => v.id === `thsr-live-${item.DailyTrainInfo.TrainNo}`
+        );
         void stopCount;
 
         matchedTrains.push({
@@ -1223,7 +1266,9 @@ export async function getRealThsrData(
           standardSeatStatus: endSeats?.std ?? 'available',
           businessSeatStatus: endSeats?.biz ?? 'available',
           nonReservedCars: '10-12車',
+          liveSubtitle: liveMatch?.subtitle?.replace('<br/>', ' · '),
           remainingStops,
+          fullStops,
         });
       }
     }

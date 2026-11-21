@@ -3,8 +3,9 @@
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { List, Map as MapIcon, MapPin, TrainFront, X } from 'lucide-react';
+import { ChevronRight, List, Map as MapIcon, MapPin, TrainFront, X } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
+import DetailDrawer from '@/components/DetailDrawer';
 import type { MapMarker } from '@/components/LeafletMap';
 import { useUserLocation } from '@/lib/location';
 import { useTransitStore } from '@/lib/transit-store';
@@ -46,6 +47,7 @@ function TraPageInner() {
   const [station, setStation] = useState(searchParams.get('station') || '1000');
   const [targetStation, setTargetStation] = useState(searchParams.get('to') || '');
   const [trains, setTrains] = useState<TraTrainRow[]>([]);
+  const [selectedTrain, setSelectedTrain] = useState<TraTrainRow | null>(null);
   const [liveVehicles, setLiveVehicles] = useState<LiveRailVehicle[]>([]);
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
@@ -388,36 +390,44 @@ function TraPageInner() {
                     return (
                     <li
                       key={`${t.trainNo}-${t.departureTime}`}
-                      className="flex items-center justify-between px-4 py-3"
                     >
-                      <div className="flex items-center gap-3">
-                        <span
-                          className={`rounded-md px-2 py-0.5 text-xs font-bold ${getTrainTypeBadge(
-                            t.trainType
-                          )}`}
-                        >
-                          {t.trainType}
-                        </span>
-                        <div>
-                          <div className="text-sm font-bold text-slate-900 dark:text-white">
-                            {t.trainNo} 次 · 往 {t.destinationStation}
-                          </div>
-                          <div className="text-xs text-slate-500">
-                            表定 {t.departureTime} 開車
-                            {targetStopInfo ? ` → 抵達 ${targetStationName} ${targetStopInfo.arrivalTime}` : ''}
-                            {etaLabel}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTrain(t)}
+                        className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors duration-150 hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]"
+                      >
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`rounded-md px-2 py-0.5 text-xs font-bold ${getTrainTypeBadge(
+                              t.trainType
+                            )}`}
+                          >
+                            {t.trainType}
+                          </span>
+                          <div>
+                            <div className="text-sm font-medium text-[#111827] dark:text-[#eef0f5]">
+                              {t.trainNo} 次 · 往 {t.destinationStation}
+                            </div>
+                            <div className="font-mono text-xs text-[#6b7487] dark:text-[#7a8296]">
+                              表定 {t.departureTime} 開車
+                              {targetStopInfo ? ` → 抵達 ${targetStationName} ${targetStopInfo.arrivalTime}` : ''}
+                              {etaLabel}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                      <span
-                        className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                          t.delayMinutes > 0
-                            ? 'bg-red-50 text-red-600 dark:bg-red-950/60 dark:text-red-400'
-                            : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'
-                        }`}
-                      >
-                        {t.statusText}
-                      </span>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`rounded-md px-2 py-0.5 text-xs font-medium ${
+                              t.delayMinutes > 0
+                                ? 'bg-red-50 text-red-600 dark:bg-red-950/60 dark:text-red-400'
+                                : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'
+                            }`}
+                          >
+                            {t.statusText}
+                          </span>
+                          <ChevronRight className="h-4 w-4 text-[#6b7487] dark:text-[#7a8296]" strokeWidth={1.5} />
+                        </div>
+                      </button>
                     </li>
                     );
                   })}
@@ -428,6 +438,121 @@ function TraPageInner() {
           })}
         </div>
       )}
+
+      <DetailDrawer
+        open={Boolean(selectedTrain)}
+        onClose={() => setSelectedTrain(null)}
+        badge={selectedTrain ? `${selectedTrain.trainType} ${selectedTrain.trainNo}` : undefined}
+        title={
+          selectedTrain
+            ? `${selectedTrain.originStation || TRA_STATIONS.find((s) => s.id === station)?.name || station} → ${selectedTrain.destinationStation}`
+            : ''
+        }
+        subtitle={
+          selectedTrain
+            ? `${selectedTrain.bound === 'north' ? '北上' : '南下'} · ${selectedTrain.statusText}`
+            : undefined
+        }
+      >
+        {selectedTrain && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] p-3 dark:border-slate-100/8 dark:bg-[#1a1e28]">
+                <div className="text-[11px] text-[#6b7487] dark:text-[#7a8296]">列車即時狀態</div>
+                <div className="mt-1 text-sm font-medium">
+                  {selectedTrain.currentLocation || '尚未進入即時區間或停靠末段'}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] p-3 dark:border-slate-100/8 dark:bg-[#1a1e28]">
+                <div className="text-[11px] text-[#6b7487] dark:text-[#7a8296]">本站表定開車</div>
+                <div className="mt-1 font-mono text-sm font-medium tabular-nums">
+                  {selectedTrain.departureTime}
+                  {selectedTrain.delayMinutes > 0 && ` (+${selectedTrain.delayMinutes}分)`}
+                </div>
+              </div>
+            </div>
+
+            {(selectedTrain.wheelchairFlag ||
+              selectedTrain.bikeFlag ||
+              selectedTrain.breastFeedingFlag ||
+              selectedTrain.note) && (
+              <div className="rounded-lg border border-slate-900/8 p-3 text-xs dark:border-slate-100/8">
+                <div className="flex flex-wrap gap-2">
+                  {selectedTrain.wheelchairFlag && (
+                    <span className="rounded-md bg-[#eceff4] px-2 py-0.5 dark:bg-[#1a1e28]">
+                      無障礙設施
+                    </span>
+                  )}
+                  {selectedTrain.bikeFlag && (
+                    <span className="rounded-md bg-[#eceff4] px-2 py-0.5 dark:bg-[#1a1e28]">
+                      可攜自行車
+                    </span>
+                  )}
+                  {selectedTrain.breastFeedingFlag && (
+                    <span className="rounded-md bg-[#eceff4] px-2 py-0.5 dark:bg-[#1a1e28]">
+                      哺集乳室
+                    </span>
+                  )}
+                </div>
+                {selectedTrain.note && (
+                  <p className="mt-2 text-[#4b5565] dark:text-[#a3a9b8]">
+                    附註：{selectedTrain.note}
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div>
+              <div className="mb-2 flex items-center justify-between text-xs font-medium text-[#4b5565] dark:text-[#a3a9b8]">
+                <span>沿途停靠站時刻表</span>
+                <span className="font-mono">{selectedTrain.fullStops?.length || 0} 站</span>
+              </div>
+              {selectedTrain.fullStops && selectedTrain.fullStops.length > 0 ? (
+                <ul className="divide-y divide-slate-900/8 rounded-lg border border-slate-900/8 dark:divide-slate-100/8 dark:border-slate-100/8">
+                  {selectedTrain.fullStops.map((st, idx) => {
+                    const isOrigin = st.stationId === station;
+                    const isTarget = Boolean(targetStation) && st.stationId === targetStation;
+                    return (
+                      <li
+                        key={`${st.stationId}-${idx}`}
+                        className={`flex items-center justify-between px-3.5 py-2.5 text-sm ${
+                          isOrigin || isTarget ? 'bg-[#eceff4]/80 dark:bg-[#1a1e28]' : ''
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className="w-5 font-mono text-xs text-[#6b7487] dark:text-[#7a8296]">
+                            {idx + 1}
+                          </span>
+                          <span className="font-medium">{st.stationName}</span>
+                          {isOrigin && (
+                            <span className="rounded bg-[#0f4c81] px-1.5 py-0.5 text-[10px] font-medium text-white dark:bg-[#38bdf8] dark:text-[#0b0d14]">
+                              出發
+                            </span>
+                          )}
+                          {isTarget && (
+                            <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                              目標
+                            </span>
+                          )}
+                        </div>
+                        <div className="font-mono text-xs tabular-nums text-[#4b5565] dark:text-[#a3a9b8]">
+                          {st.arrivalTime === st.departureTime
+                            ? st.departureTime
+                            : `${st.arrivalTime} / ${st.departureTime}`}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
+                  目前為即時電子看板備援資料，暫無完整停靠站表
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </DetailDrawer>
     </div>
   );
 }

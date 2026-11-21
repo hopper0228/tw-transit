@@ -92,6 +92,13 @@ export interface MetroSystemSnapshot {
   source: DataSourceMode;
 }
 
+export interface TraStopTime {
+  stationId: string;
+  stationName: string;
+  arrivalTime: string;
+  departureTime: string;
+}
+
 export interface TraTrainRow {
   trainNo: string;
   trainType: '新自強' | '普悠瑪' | '太魯閣' | '自強' | '莒光' | '區間快' | '區間';
@@ -104,7 +111,13 @@ export interface TraTrainRow {
   durationMinutes?: number;
   delayMinutes: number; // 0 = 準點
   statusText: string;
+  currentLocation?: string;
+  note?: string;
+  wheelchairFlag?: boolean;
+  bikeFlag?: boolean;
+  breastFeedingFlag?: boolean;
   remainingStops?: { stationId: string; arrivalTime: string }[];
+  fullStops?: TraStopTime[];
 }
 
 export interface ThsrTrainRow {
@@ -120,10 +133,19 @@ export interface ThsrTrainRow {
   standardSeatStatus: 'available' | 'limited' | 'full';
   businessSeatStatus: 'available' | 'limited' | 'full';
   nonReservedCars: string; // 例如 "10-12車"
+  liveSubtitle?: string;
   remainingStops?: {
     stationId: string;
     stationName: string;
     arrivalTime: string;
+    standardSeatStatus?: 'available' | 'limited' | 'full';
+    businessSeatStatus?: 'available' | 'limited' | 'full';
+  }[];
+  fullStops?: {
+    stationId: string;
+    stationName: string;
+    arrivalTime: string;
+    departureTime: string;
     standardSeatStatus?: 'available' | 'limited' | 'full';
     businessSeatStatus?: 'available' | 'limited' | 'full';
   }[];

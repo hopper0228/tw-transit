@@ -3,8 +3,9 @@
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { List, Map as MapIcon, MapPin, Zap } from 'lucide-react';
+import { ChevronRight, List, Map as MapIcon, MapPin, Zap } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
+import DetailDrawer from '@/components/DetailDrawer';
 import type { MapMarker } from '@/components/LeafletMap';
 import { useUserLocation } from '@/lib/location';
 import { useTransitStore } from '@/lib/transit-store';
@@ -52,6 +53,7 @@ function ThsrPageInner() {
   const [from, setFrom] = useState(searchParams.get('from') || '1000');
   const [targetStation, setTargetStation] = useState(searchParams.get('to') || '');
   const [trains, setTrains] = useState<ThsrTrainRow[]>([]);
+  const [selectedTrain, setSelectedTrain] = useState<ThsrTrainRow | null>(null);
   const [liveVehicles, setLiveVehicles] = useState<LiveRailVehicle[]>([]);
   const [updatedAt, setUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
@@ -383,44 +385,48 @@ function ThsrPageInner() {
                     }
 
                     return (
-                      <li
-                        key={t.trainNo}
-                        className="flex flex-wrap items-center justify-between gap-3 px-4 py-3.5"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="text-center">
-                            <span
-                              className={`block rounded-lg px-2.5 py-1 text-xs font-bold tabular-nums ${col.badgeClass}`}
-                            >
-                              {t.trainNo}
-                            </span>
-                            <span className="mt-1 block text-[11px] font-medium text-slate-500">
-                              {t.stopPattern}
-                            </span>
+                      <li key={t.trainNo}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedTrain(t)}
+                          className="flex w-full flex-wrap items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors duration-150 hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="text-center">
+                              <span
+                                className={`block rounded-lg px-2.5 py-1 text-xs font-bold tabular-nums ${col.badgeClass}`}
+                              >
+                                {t.trainNo}
+                              </span>
+                              <span className="mt-1 block text-[11px] font-medium text-slate-500">
+                                {t.stopPattern}
+                              </span>
+                            </div>
+
+                            <div>
+                              <div className="text-base font-medium tabular-nums text-[#111827] dark:text-[#eef0f5]">
+                                {t.departureTime} → {displayArrival}
+                              </div>
+                              <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">
+                                {targetStop ? `抵達 ${displayDest}` : `終點 ${displayDest}`} · 約{' '}
+                                {displayDur} 分 · 自由座 {t.nonReservedCars}
+                                {etaLabel}
+                              </div>
+                            </div>
                           </div>
 
-                          <div>
-                            <div className="text-base font-extrabold tabular-nums text-slate-900 dark:text-white">
-                              {t.departureTime} → {displayArrival}
+                          <div className="flex items-center gap-3">
+                            <div className="text-center">
+                              <div className="mb-0.5 text-[10px] text-[#6b7487]">標準座</div>
+                              {renderSeatBadge(stdStatus)}
                             </div>
-                            <div className="text-xs text-slate-500">
-                              {targetStop ? `抵達 ${displayDest}` : `終點 ${displayDest}`} · 約{' '}
-                              {displayDur} 分 · 自由座 {t.nonReservedCars}
-                              {etaLabel}
+                            <div className="text-center">
+                              <div className="mb-0.5 text-[10px] text-[#6b7487]">商務座</div>
+                              {renderSeatBadge(bizStatus)}
                             </div>
+                            <ChevronRight className="h-4 w-4 text-[#6b7487] dark:text-[#7a8296]" strokeWidth={1.5} />
                           </div>
-                        </div>
-
-                        <div className="flex items-center gap-3">
-                          <div className="text-center">
-                            <div className="mb-0.5 text-[10px] text-slate-400">標準座</div>
-                            {renderSeatBadge(stdStatus)}
-                          </div>
-                          <div className="text-center">
-                            <div className="mb-0.5 text-[10px] text-slate-400">商務座</div>
-                            {renderSeatBadge(bizStatus)}
-                          </div>
-                        </div>
+                        </button>
                       </li>
                     );
                   })}
@@ -430,6 +436,103 @@ function ThsrPageInner() {
           ))}
         </div>
       )}
+
+      <DetailDrawer
+        open={Boolean(selectedTrain)}
+        onClose={() => setSelectedTrain(null)}
+        badge={selectedTrain ? `高鐵 ${selectedTrain.trainNo}` : undefined}
+        title={
+          selectedTrain
+            ? `${selectedTrain.originStation || fromName} → ${selectedTrain.destinationStation}`
+            : ''
+        }
+        subtitle={
+          selectedTrain
+            ? `${selectedTrain.bound === 'north' ? '北上' : '南下'} · ${selectedTrain.stopPattern} · 自由座 ${selectedTrain.nonReservedCars}`
+            : undefined
+        }
+      >
+        {selectedTrain && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] p-3 dark:border-slate-100/8 dark:bg-[#1a1e28]">
+                <div className="text-[11px] text-[#6b7487] dark:text-[#7a8296]">列車即時位置</div>
+                <div className="mt-1 text-sm font-medium">
+                  {selectedTrain.liveSubtitle || '尚未發車或已抵達終點'}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] p-3 dark:border-slate-100/8 dark:bg-[#1a1e28]">
+                <div className="text-[11px] text-[#6b7487] dark:text-[#7a8296]">
+                  {fromName}開車 → {selectedTrain.destinationStation}
+                </div>
+                <div className="mt-1 font-mono text-sm font-medium tabular-nums">
+                  {selectedTrain.departureTime} → {selectedTrain.arrivalTime}（約 {selectedTrain.durationMinutes} 分）
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-2 flex items-center justify-between text-xs font-medium text-[#4b5565] dark:text-[#a3a9b8]">
+                <span>停靠站時刻與從「{fromName}」出發各站餘位</span>
+                <span className="font-mono">{selectedTrain.fullStops?.length || 0} 站</span>
+              </div>
+              {selectedTrain.fullStops && selectedTrain.fullStops.length > 0 ? (
+                <ul className="divide-y divide-slate-900/8 rounded-lg border border-slate-900/8 dark:divide-slate-100/8 dark:border-slate-100/8">
+                  {selectedTrain.fullStops.map((st, idx) => {
+                    const isOrigin = st.stationId === from;
+                    const isTarget = Boolean(targetStation) && st.stationId === targetStation;
+                    return (
+                      <li
+                        key={`${st.stationId}-${idx}`}
+                        className={`flex items-center justify-between gap-2 px-3.5 py-2.5 text-sm ${
+                          isOrigin || isTarget ? 'bg-[#eceff4]/80 dark:bg-[#1a1e28]' : ''
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="w-5 font-mono text-xs text-[#6b7487] dark:text-[#7a8296]">
+                              {idx + 1}
+                            </span>
+                            <span className="font-medium">{st.stationName}</span>
+                            {isOrigin && (
+                              <span className="rounded bg-[#0f4c81] px-1.5 py-0.5 text-[10px] font-medium text-white dark:bg-[#38bdf8] dark:text-[#0b0d14]">
+                                出發
+                              </span>
+                            )}
+                            {isTarget && (
+                              <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                                目標
+                              </span>
+                            )}
+                          </div>
+                          <div className="ml-7 font-mono text-xs tabular-nums text-[#6b7487] dark:text-[#7a8296]">
+                            {st.arrivalTime === st.departureTime
+                              ? st.departureTime
+                              : `${st.arrivalTime} / ${st.departureTime}`}
+                          </div>
+                        </div>
+
+                        {st.standardSeatStatus && st.businessSeatStatus && (
+                          <div className="flex shrink-0 items-center gap-2">
+                            <div className="text-center">
+                              <div className="text-[10px] text-[#6b7487]">標準</div>
+                              {renderSeatBadge(st.standardSeatStatus)}
+                            </div>
+                            <div className="text-center">
+                              <div className="text-[10px] text-[#6b7487]">商務</div>
+                              {renderSeatBadge(st.businessSeatStatus)}
+                            </div>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+            </div>
+          </div>
+        )}
+      </DetailDrawer>
     </div>
   );
 }

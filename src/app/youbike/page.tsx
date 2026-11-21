@@ -3,8 +3,9 @@
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useState } from 'react';
-import { Bike, List, Map as MapIcon, MapPin, Search } from 'lucide-react';
+import { Bike, ExternalLink, List, Map as MapIcon, MapPin, Search } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
+import DetailDrawer from '@/components/DetailDrawer';
 import LocationBanner from '@/components/LocationBanner';
 import { formatDistance, useUserLocation } from '@/lib/location';
 import { useTransitStore } from '@/lib/transit-store';
@@ -33,6 +34,7 @@ function YouBikePageInner() {
   const { syncVersion, triggerFrontendRefresh, getCached, fetchWithCache } =
     useTransitStore();
   const [frontendUpdatedAt, setFrontendUpdatedAt] = useState('');
+  const [selectedStation, setSelectedStation] = useState<YouBikeStation | null>(null);
 
   const [maxDistance, setMaxDistance] = useState<number>(3000);
   const [query, setQuery] = useState(searchParams.get('q') || '');
@@ -234,9 +236,11 @@ function YouBikePageInner() {
           {stations.map((st) => {
             const totalAvail = st.availableBikes20 + st.availableBikes20E;
             return (
-              <div
+              <button
                 key={st.stationUid}
-                className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900"
+                type="button"
+                onClick={() => setSelectedStation(st)}
+                className="transit-card flex w-full flex-col justify-between p-4 text-left transition-colors duration-150 hover:border-slate-900/20 dark:hover:border-slate-100/20"
               >
                 <div>
                   <div className="flex items-start justify-between gap-2">
@@ -288,11 +292,91 @@ function YouBikePageInner() {
                     </div>
                   </div>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
       )}
+
+      <DetailDrawer
+        open={Boolean(selectedStation)}
+        onClose={() => setSelectedStation(null)}
+        badge={selectedStation ? (selectedStation.city === 'Taipei' ? '台北市' : '新北市') : undefined}
+        title={selectedStation?.stationName || ''}
+        subtitle={selectedStation ? `${selectedStation.address} · 更新於 ${selectedStation.updatedAt}` : undefined}
+      >
+        {selectedStation && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] p-3.5 dark:border-slate-100/8 dark:bg-[#1a1e28]">
+                <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">可借車輛合計</div>
+                <div className="mt-1 font-mono text-2xl font-medium tabular-nums">
+                  {selectedStation.availableBikes20 + selectedStation.availableBikes20E}
+                </div>
+                <div className="mt-1 font-mono text-xs text-[#4b5565] dark:text-[#a3a9b8]">
+                  2.0 一般車 {selectedStation.availableBikes20} · 2.0E 電輔車 {selectedStation.availableBikes20E}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] p-3.5 dark:border-slate-100/8 dark:bg-[#1a1e28]">
+                <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">可還空位</div>
+                <div className="mt-1 font-mono text-2xl font-medium tabular-nums">
+                  {selectedStation.availableReturnDocks}
+                </div>
+                <div className="mt-1 font-mono text-xs text-[#4b5565] dark:text-[#a3a9b8]">
+                  總車柱 {selectedStation.totalDocks} 柱
+                </div>
+              </div>
+            </div>
+
+            <a
+              href={`https://www.google.com/maps/dir/?api=1&destination=${selectedStation.lat},${selectedStation.lng}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#0f4c81] px-4 py-2.5 text-sm font-medium text-white transition-colors duration-150 hover:opacity-90 dark:bg-slate-100 dark:text-[#0b0d14]"
+            >
+              開啟 Google Maps 導航
+              <ExternalLink className="h-4 w-4" strokeWidth={1.5} />
+            </a>
+
+            <div>
+              <div className="mb-2 text-xs font-medium text-[#4b5565] dark:text-[#a3a9b8]">
+                鄰近替代站點
+              </div>
+              <ul className="divide-y divide-slate-900/8 rounded-lg border border-slate-900/8 dark:divide-slate-100/8 dark:border-slate-100/8">
+                {stations
+                  .filter((s) => s.stationUid !== selectedStation.stationUid)
+                  .map((s) => ({
+                    st: s,
+                    dist:
+                      Math.hypot(s.lat - selectedStation.lat, s.lng - selectedStation.lng) *
+                      111000,
+                  }))
+                  .sort((a, b) => a.dist - b.dist)
+                  .slice(0, 3)
+                  .map(({ st, dist }) => (
+                    <li key={st.stationUid}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedStation(st)}
+                        className="flex w-full items-center justify-between px-3.5 py-2.5 text-left text-sm transition-colors hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{st.stationName}</div>
+                          <div className="font-mono text-xs text-[#6b7487]">
+                            約 {Math.round(dist)} m
+                          </div>
+                        </div>
+                        <div className="font-mono text-xs tabular-nums text-[#4b5565] dark:text-[#a3a9b8]">
+                          可借 {st.availableBikes20 + st.availableBikes20E} / 空位 {st.availableReturnDocks}
+                        </div>
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          </div>
+        )}
+      </DetailDrawer>
     </div>
   );
 }

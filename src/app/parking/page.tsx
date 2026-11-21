@@ -12,6 +12,7 @@ import {
   Search,
 } from 'lucide-react';
 import AutoRefreshBadge from '@/components/AutoRefreshBadge';
+import DetailDrawer from '@/components/DetailDrawer';
 import LocationBanner from '@/components/LocationBanner';
 import { formatDistance, useUserLocation } from '@/lib/location';
 import { useTransitStore } from '@/lib/transit-store';
@@ -49,6 +50,7 @@ function ParkingPageInner() {
   const [totalCount, setTotalCount] = useState(0);
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
   const [updatedAt, setUpdatedAt] = useState('');
+  const [selectedLot, setSelectedLot] = useState<ParkingLot | null>(null);
   const [loading, setLoading] = useState(false);
 
   const loadLots = useCallback(
@@ -289,7 +291,16 @@ function ParkingPageInner() {
             return (
               <div
                 key={lot.carParkId}
-                className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900"
+                onClick={() => setSelectedLot(lot)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setSelectedLot(lot);
+                  }
+                }}
+                className="transit-card flex cursor-pointer flex-wrap items-center justify-between gap-4 p-4 transition-colors duration-150 hover:border-slate-900/20 dark:hover:border-slate-100/20"
               >
                 <div className="min-w-0 flex-1 space-y-1">
                   <div className="flex items-center gap-2">
@@ -346,7 +357,8 @@ function ParkingPageInner() {
                     href={navUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-1 rounded-xl bg-slate-900 px-3.5 py-2.5 text-xs font-semibold text-white transition hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-300"
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex items-center gap-1 rounded-lg bg-slate-900 px-3.5 py-2.5 text-xs font-medium text-white transition-colors duration-150 hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-300"
                   >
                     導航
                     <ExternalLink className="h-3.5 w-3.5" />
@@ -357,6 +369,91 @@ function ParkingPageInner() {
           })}
         </div>
       )}
+
+      <DetailDrawer
+        open={Boolean(selectedLot)}
+        onClose={() => setSelectedLot(null)}
+        badge={selectedLot?.parkingType}
+        title={selectedLot?.name || ''}
+        subtitle={selectedLot ? `${selectedLot.address} · ${selectedLot.updatedAt}` : undefined}
+      >
+        {selectedLot && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] p-3.5 dark:border-slate-100/8 dark:bg-[#1a1e28]">
+                <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">
+                  {selectedLot.availableSpaces !== null ? '即時剩餘車位' : '總格位數'}
+                </div>
+                <div className="mt-1 font-mono text-2xl font-medium tabular-nums">
+                  {selectedLot.availableSpaces !== null
+                    ? selectedLot.availableSpaces === 0
+                      ? '已滿'
+                      : selectedLot.availableSpaces
+                    : selectedLot.totalSpaces}
+                </div>
+                <div className="mt-1 font-mono text-xs text-[#4b5565] dark:text-[#a3a9b8]">
+                  總計 {selectedLot.totalSpaces} 車位
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] p-3.5 dark:border-slate-100/8 dark:bg-[#1a1e28]">
+                <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">收費標準</div>
+                <div className="mt-1 text-xs leading-relaxed text-[#111827] dark:text-[#eef0f5]">
+                  {selectedLot.fareDescription}
+                </div>
+              </div>
+            </div>
+
+            <a
+              href={`https://www.google.com/maps/dir/?api=1&destination=${selectedLot.lat},${selectedLot.lng}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#0f4c81] px-4 py-2.5 text-sm font-medium text-white transition-colors duration-150 hover:opacity-90 dark:bg-slate-100 dark:text-[#0b0d14]"
+            >
+              開啟 Google Maps 導航
+              <ExternalLink className="h-4 w-4" strokeWidth={1.5} />
+            </a>
+
+            <div>
+              <div className="mb-2 text-xs font-medium text-[#4b5565] dark:text-[#a3a9b8]">
+                鄰近替代停車場
+              </div>
+              <ul className="divide-y divide-slate-900/8 rounded-lg border border-slate-900/8 dark:divide-slate-100/8 dark:border-slate-100/8">
+                {lots
+                  .filter((l) => l.carParkId !== selectedLot.carParkId)
+                  .map((l) => ({
+                    lot: l,
+                    dist:
+                      Math.hypot(l.lat - selectedLot.lat, l.lng - selectedLot.lng) *
+                      111000,
+                  }))
+                  .sort((a, b) => a.dist - b.dist)
+                  .slice(0, 3)
+                  .map(({ lot, dist }) => (
+                    <li key={lot.carParkId}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedLot(lot)}
+                        className="flex w-full items-center justify-between px-3.5 py-2.5 text-left text-sm transition-colors hover:bg-[#f5f7fa] dark:hover:bg-[#1a1e28]"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{lot.name}</div>
+                          <div className="font-mono text-xs text-[#6b7487]">
+                            約 {Math.round(dist)} m · {lot.parkingType}
+                          </div>
+                        </div>
+                        <div className="font-mono text-xs tabular-nums text-[#4b5565] dark:text-[#a3a9b8]">
+                          {lot.availableSpaces !== null
+                            ? `剩 ${lot.availableSpaces} 位`
+                            : `共 ${lot.totalSpaces} 位`}
+                        </div>
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          </div>
+        )}
+      </DetailDrawer>
     </div>
   );
 }
