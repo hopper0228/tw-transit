@@ -836,10 +836,66 @@ async function syncYb2AllToDb(): Promise<{
   return { total: out.length, counts };
 }
 
+interface Yb2LiveStationRaw {
+  station_no: string;
+  status: number;
+  parking_spaces?: number;
+  available_spaces?: number;
+  available_spaces_detail?: { yb2?: number; eyb?: number };
+  empty_spaces?: number;
+  time?: string;
+  updated_at?: string;
+}
+
+async function getYb2LiveMap(): Promise<Map<string, Yb2LiveStationRaw>> {
+  return fetchAndTransform<Yb2LiveStationRaw[], Map<string, Yb2LiveStationRaw>>(
+    'yb2-nationwide-live-map',
+    'https://apis.youbike.com.tw/json/station-yb2.json',
+    15,
+    false,
+    (raw) => {
+      const map = new Map<string, Yb2LiveStationRaw>();
+      for (const st of Array.isArray(raw) ? raw : []) {
+        if (st.station_no) map.set(st.station_no, st);
+      }
+      return map;
+    }
+  ).catch(() => new Map<string, Yb2LiveStationRaw>());
+}
+
 async function enrichTdxBikeAvailability(
   stations: YouBikeStation[]
 ): Promise<YouBikeStation[]> {
-  if (!isTdxConfigured() || stations.length === 0) return stations;
+  if (stations.length === 0) return stations;
+  const hasOutsideTpeNtpc = stations.some(
+    (s) => s.city !== 'Taipei' && s.city !== 'NewTaipei'
+  );
+  if (!hasOutsideTpeNtpc) return stations;
+
+  // 優先使用 YouBike 2.0 全台官方即時 JSON（無 TDX 429 限流，含電輔車數量）
+  const yb2Map = await getYb2LiveMap();
+  if (yb2Map.size > 0) {
+    return stations.map((s) => {
+      if (s.city === 'Taipei' || s.city === 'NewTaipei') return s;
+      const live = yb2Map.get(s.stationUid);
+      if (!live) return s;
+      const yb2 = live.available_spaces_detail?.yb2 ?? live.available_spaces ?? 0;
+      const eyb = live.available_spaces_detail?.eyb ?? 0;
+      const ret = live.empty_spaces ?? 0;
+      const tot = live.parking_spaces && live.parking_spaces > 0 ? live.parking_spaces : yb2 + eyb + ret;
+      return {
+        ...s,
+        totalDocks: tot,
+        availableBikes20: yb2,
+        availableBikes20E: eyb,
+        availableReturnDocks: ret,
+        serviceStatus: live.status === 1 ? 1 : 0,
+        updatedAt: (live.time || live.updated_at || '').slice(11, 19) || '即時',
+      };
+    });
+  }
+
+  if (!isTdxConfigured()) return stations;
   const tdxCities = Array.from(
     new Set(
       stations
