@@ -455,101 +455,78 @@ function TraPageInner() {
         }
       >
         {selectedTrain && (
-          <div className="space-y-5">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] p-3 dark:border-slate-100/8 dark:bg-[#1a1e28]">
-                <div className="text-[11px] text-[#6b7487] dark:text-[#7a8296]">列車即時狀態</div>
-                <div className="mt-1 text-sm font-medium">
-                  {selectedTrain.currentLocation || '尚未進入即時區間或停靠末段'}
-                </div>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] px-3.5 py-2.5 text-xs text-[#4b5565] dark:border-slate-100/8 dark:bg-[#1a1e28] dark:text-[#a3a9b8]">
+              <div className="flex items-center justify-between gap-2">
+                <span>
+                  目前位置：{selectedTrain.currentLocation || '尚未進入即時區間'}
+                </span>
+                <span className="font-mono font-medium text-[#111827] dark:text-[#eef0f5]">
+                  {selectedTrain.statusText}
+                </span>
               </div>
-              <div className="rounded-lg border border-slate-900/8 bg-[#f5f7fa] p-3 dark:border-slate-100/8 dark:bg-[#1a1e28]">
-                <div className="text-[11px] text-[#6b7487] dark:text-[#7a8296]">本站表定開車</div>
-                <div className="mt-1 font-mono text-sm font-medium tabular-nums">
-                  {selectedTrain.departureTime}
-                  {selectedTrain.delayMinutes > 0 && ` (+${selectedTrain.delayMinutes}分)`}
-                </div>
-              </div>
-            </div>
-
-            {(selectedTrain.wheelchairFlag ||
-              selectedTrain.bikeFlag ||
-              selectedTrain.breastFeedingFlag ||
-              selectedTrain.note) && (
-              <div className="rounded-lg border border-slate-900/8 p-3 text-xs dark:border-slate-100/8">
-                <div className="flex flex-wrap gap-2">
-                  {selectedTrain.wheelchairFlag && (
-                    <span className="rounded-md bg-[#eceff4] px-2 py-0.5 dark:bg-[#1a1e28]">
-                      無障礙設施
-                    </span>
-                  )}
-                  {selectedTrain.bikeFlag && (
-                    <span className="rounded-md bg-[#eceff4] px-2 py-0.5 dark:bg-[#1a1e28]">
-                      可攜自行車
-                    </span>
-                  )}
-                  {selectedTrain.breastFeedingFlag && (
-                    <span className="rounded-md bg-[#eceff4] px-2 py-0.5 dark:bg-[#1a1e28]">
-                      哺集乳室
-                    </span>
-                  )}
-                </div>
-                {selectedTrain.note && (
-                  <p className="mt-2 text-[#4b5565] dark:text-[#a3a9b8]">
-                    附註：{selectedTrain.note}
-                  </p>
-                )}
-              </div>
-            )}
-
-            <div>
-              <div className="mb-2 flex items-center justify-between text-xs font-medium text-[#4b5565] dark:text-[#a3a9b8]">
-                <span>沿途停靠站時刻表</span>
-                <span className="font-mono">{selectedTrain.fullStops?.length || 0} 站</span>
-              </div>
-              {selectedTrain.fullStops && selectedTrain.fullStops.length > 0 ? (
-                <ul className="divide-y divide-slate-900/8 rounded-lg border border-slate-900/8 dark:divide-slate-100/8 dark:border-slate-100/8">
-                  {selectedTrain.fullStops.map((st, idx) => {
-                    const isOrigin = st.stationId === station;
-                    const isTarget = Boolean(targetStation) && st.stationId === targetStation;
-                    return (
-                      <li
-                        key={`${st.stationId}-${idx}`}
-                        className={`flex items-center justify-between px-3.5 py-2.5 text-sm ${
-                          isOrigin || isTarget ? 'bg-[#eceff4]/80 dark:bg-[#1a1e28]' : ''
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <span className="w-5 font-mono text-xs text-[#6b7487] dark:text-[#7a8296]">
-                            {idx + 1}
-                          </span>
-                          <span className="font-medium">{st.stationName}</span>
-                          {isOrigin && (
-                            <span className="rounded bg-[#0f4c81] px-1.5 py-0.5 text-[10px] font-medium text-white dark:bg-[#38bdf8] dark:text-[#0b0d14]">
-                              出發
-                            </span>
-                          )}
-                          {isTarget && (
-                            <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                              目標
-                            </span>
-                          )}
-                        </div>
-                        <div className="font-mono text-xs tabular-nums text-[#4b5565] dark:text-[#a3a9b8]">
-                          {st.arrivalTime === st.departureTime
-                            ? st.departureTime
-                            : `${st.arrivalTime} / ${st.departureTime}`}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
-                  目前為即時電子看板備援資料，暫無完整停靠站表
+              {selectedTrain.note && (
+                <div className="mt-1 text-[11px] text-[#6b7487] dark:text-[#7a8296]">
+                  {selectedTrain.note}
                 </div>
               )}
             </div>
+
+            {(() => {
+              const stops = selectedTrain.fullStops || [];
+              const startIdx = Math.max(
+                0,
+                stops.findIndex((s) => s.stationId === station)
+              );
+              const upcomingStops = stops.slice(startIdx);
+              if (upcomingStops.length === 0) {
+                return (
+                  <div className="rounded-lg border border-slate-900/8 p-4 text-center text-xs text-[#6b7487] dark:border-slate-100/8">
+                    目前為即時電子看板備援資料，暫無完整停靠站表
+                  </div>
+                );
+              }
+              return (
+                <div>
+                  <div className="mb-2 flex items-center justify-between text-xs text-[#6b7487] dark:text-[#7a8296]">
+                    <span>從本站出發後續停靠站</span>
+                    <span className="font-mono">{upcomingStops.length} 站</span>
+                  </div>
+                  <ul className="divide-y divide-slate-900/8 rounded-lg border border-slate-900/8 dark:divide-slate-100/8 dark:border-slate-100/8">
+                    {upcomingStops.map((st, idx) => {
+                      const isOrigin = st.stationId === station;
+                      const isTarget = Boolean(targetStation) && st.stationId === targetStation;
+                      const timeLabel = isOrigin ? st.departureTime : st.arrivalTime;
+                      return (
+                        <li
+                          key={`${st.stationId}-${idx}`}
+                          className={`flex items-center justify-between px-3.5 py-2.5 text-sm ${
+                            isOrigin || isTarget ? 'bg-[#eceff4]/80 dark:bg-[#1a1e28]' : ''
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{st.stationName}</span>
+                            {isOrigin && (
+                              <span className="rounded bg-[#0f4c81] px-1.5 py-0.5 text-[10px] font-medium text-white dark:bg-[#38bdf8] dark:text-[#0b0d14]">
+                                本站出發
+                              </span>
+                            )}
+                            {isTarget && (
+                              <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                                目標站
+                              </span>
+                            )}
+                          </div>
+                          <span className="font-mono text-sm tabular-nums text-[#111827] dark:text-[#eef0f5]">
+                            {timeLabel}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              );
+            })()}
           </div>
         )}
       </DetailDrawer>
