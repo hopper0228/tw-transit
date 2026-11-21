@@ -124,8 +124,12 @@ export default function HomePage() {
 
   const liveClock =
     nowMs > 0
-      ? new Date(nowMs).toLocaleTimeString('zh-TW', { hour12: false })
-      : '--:--:--';
+      ? new Date(nowMs).toLocaleTimeString('zh-TW', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        })
+      : '--:--';
 
   return (
     <div className="space-y-10">

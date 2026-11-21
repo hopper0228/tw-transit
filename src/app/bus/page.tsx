@@ -59,10 +59,8 @@ function formatEtaBadge(stop: BusStopStatus, offsetSec = 0) {
   }
   const min = Math.ceil(sec / 60);
   if (min <= 3) {
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
     return {
-      text: `${m}分${String(s).padStart(2, '0')}秒`,
+      text: `${min} 分`,
       className: 'bg-orange-500 text-white shadow-xs',
     };
   }

@@ -23,7 +23,7 @@ export default function AutoRefreshBadge({
   isRefreshing,
   lastUpdated,
 }: AutoRefreshBadgeProps) {
-  const { syncCountdown, isSyncing, lastSyncLabel, triggerFrontendRefresh } =
+  const { syncCountdown, isSyncing, triggerFrontendRefresh } =
     useTransitStore();
   const [justUpdated, setJustUpdated] = useState(false);
 
@@ -58,7 +58,6 @@ export default function AutoRefreshBadge({
     100,
     Math.max(0, ((intervalSeconds - syncCountdown) / intervalSeconds) * 100)
   );
-  const displayUpdated = lastUpdated || lastSyncLabel;
 
   return (
     <button
@@ -85,7 +84,7 @@ export default function AutoRefreshBadge({
         style={{ transform: `scaleX(${progressPct / 100})` }}
       />
 
-      <span className="relative flex items-center gap-2 font-mono">
+      <span className="relative flex items-center gap-2">
         {busy ? (
           <>
             <RefreshCw className="h-4 w-4 animate-spin" strokeWidth={1.5} />
@@ -97,12 +96,12 @@ export default function AutoRefreshBadge({
               className="h-4 w-4 text-[#16a34a] dark:text-[#4cc38a]"
               strokeWidth={1.5}
             />
-            <span>已更新{displayUpdated ? ` ${displayUpdated}` : ''}</span>
+            <span>已更新</span>
           </>
         ) : (
           <>
             <RefreshCw className="h-4 w-4" strokeWidth={1.5} />
-            <span className="tabular-nums">{syncCountdown}s</span>
+            <span>即時更新</span>
           </>
         )}
       </span>
