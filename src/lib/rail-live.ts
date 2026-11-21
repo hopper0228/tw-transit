@@ -945,9 +945,7 @@ export async function getRealTraData(
   if (mode === 'board') {
     const stationSchedules = index?.byStation.get(station) ?? [];
     const pickBound = (bound: 'north' | 'south'): TraTrainRow[] => {
-      const boundAll = stationSchedules.filter((s) => s.bound === bound);
-      const upcoming = boundAll.filter((s) => s.departureTime >= hhmm);
-      const chosen = upcoming.length > 0 ? upcoming : boundAll;
+      const chosen = stationSchedules.filter((s) => s.bound === bound);
       return chosen.map((s) => {
         const delay = delayMap.get(s.trainNo) ?? 0;
         const meta = index?.trainByNo.get(s.trainNo);
@@ -1283,11 +1281,8 @@ export async function getRealThsrData(
       const upcoming = matchedTrains.filter((t) => t.departureTime >= hhmm);
       trains = (upcoming.length > 0 ? upcoming : matchedTrains).slice(0, 20);
     } else {
-      const pickBound = (b: 'north' | 'south') => {
-        const all = matchedTrains.filter((t) => t.bound === b);
-        const upcoming = all.filter((t) => t.departureTime >= hhmm);
-        return upcoming.length > 0 ? upcoming : all;
-      };
+      const pickBound = (b: 'north' | 'south') =>
+        matchedTrains.filter((t) => t.bound === b);
       trains = [...pickBound('north'), ...pickBound('south')];
     }
 

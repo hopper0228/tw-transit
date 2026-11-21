@@ -15,7 +15,6 @@ import {
   getTraStationCoord,
 } from '@/lib/rail-geo';
 import {
-  DepartureWindowMode,
   filterByDepartureWindow,
   getDefaultTaipeiHourMinute15,
   HOURS_24,
@@ -55,7 +54,6 @@ function TraPageInner() {
   const [targetStation, setTargetStation] = useState(searchParams.get('to') || '');
   const [trains, setTrains] = useState<TraTrainRow[]>([]);
   const [selectedTrain, setSelectedTrain] = useState<TraTrainRow | null>(null);
-  const [departureMode, setDepartureMode] = useState<DepartureWindowMode>('now60');
   const [customHour, setCustomHour] = useState<string>(
     () => getDefaultTaipeiHourMinute15().hour
   );
@@ -150,14 +148,8 @@ function TraPageInner() {
           t.remainingStops?.some((s) => s.stationId === targetStation)
         )
       : trains;
-    return filterByDepartureWindow(
-      byTarget,
-      departureMode,
-      customHour,
-      customMinute,
-      nowMs
-    );
-  }, [trains, targetStation, departureMode, customHour, customMinute, nowMs]);
+    return filterByDepartureWindow(byTarget, customHour, customMinute);
+  }, [trains, targetStation, customHour, customMinute]);
 
   const targetStationName = useMemo(
     () => TRA_STATIONS.find((s) => s.id === targetStation)?.name || '',
@@ -286,42 +278,30 @@ function TraPageInner() {
               <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold text-slate-500">發車時間：</span>
                 <select
-                  value={departureMode}
-                  onChange={(e) => setDepartureMode(e.target.value as DepartureWindowMode)}
-                  className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+                  value={customHour}
+                  onChange={(e) => setCustomHour(e.target.value)}
+                  className="rounded-xl border border-slate-300 bg-slate-50 px-2.5 py-1.5 font-mono text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+                  aria-label="選擇發車小時"
                 >
-                  <option value="now60">現在起 1 小時內</option>
-                  <option value="custom60">指定時間（1 小時內）</option>
-                  <option value="all">今日剩餘全部</option>
+                  {HOURS_24.map((h) => (
+                    <option key={h} value={h}>
+                      {h} 時
+                    </option>
+                  ))}
                 </select>
-                {departureMode === 'custom60' && (
-                  <div className="flex items-center gap-1">
-                    <select
-                      value={customHour}
-                      onChange={(e) => setCustomHour(e.target.value)}
-                      className="rounded-xl border border-slate-300 bg-slate-50 px-2.5 py-1.5 font-mono text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
-                      aria-label="選擇發車小時"
-                    >
-                      {HOURS_24.map((h) => (
-                        <option key={h} value={h}>
-                          {h} 時
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={customMinute}
-                      onChange={(e) => setCustomMinute(e.target.value)}
-                      className="rounded-xl border border-slate-300 bg-slate-50 px-2.5 py-1.5 font-mono text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
-                      aria-label="選擇發車分鐘"
-                    >
-                      {MINUTES_15.map((m) => (
-                        <option key={m} value={m}>
-                          {m} 分
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
+                <select
+                  value={customMinute}
+                  onChange={(e) => setCustomMinute(e.target.value)}
+                  className="rounded-xl border border-slate-300 bg-slate-50 px-2.5 py-1.5 font-mono text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+                  aria-label="選擇發車分鐘"
+                >
+                  {MINUTES_15.map((m) => (
+                    <option key={m} value={m}>
+                      {m} 分
+                    </option>
+                  ))}
+                </select>
+                <span className="text-xs text-[#6b7487] dark:text-[#7a8296]">後 1 小時</span>
               </div>
 
               <div className="flex items-center gap-2">
