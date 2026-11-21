@@ -249,42 +249,62 @@ export function TransitStoreProvider({
     }, 2000);
   }, []);
 
-  const syncAllActive = useCallback(async () => {
-    const targets = Array.from(activeTargetsRef.current.values());
-    if (targets.length === 0) return;
+  const syncAllActive = useCallback(
+    async (broadcast = true) => {
+      const targets = Array.from(activeTargetsRef.current.values());
+      if (targets.length === 0) return;
 
-    setIsSyncing(true);
-    lastSyncAtRef.current = Date.now();
+      setIsSyncing(true);
+      lastSyncAtRef.current = Date.now();
+      if (broadcast && typeof BroadcastChannel !== 'undefined') {
+        try {
+          const ch = new BroadcastChannel('tw-transit-sync');
+          ch.postMessage({ type: 'SYNC_START' });
+          ch.close();
+        } catch {
+          // ignore
+        }
+      }
 
-    const runGroup = async (groupFilter: ActiveGroup) => {
-      const items = targets.filter((t) => t.group === groupFilter);
-      await Promise.allSettled(
-        items.map((t) => fetchWithCache(t.key, t.url, { force: true }))
-      );
-    };
+      const runGroup = async (groupFilter: ActiveGroup) => {
+        const items = targets.filter((t) => t.group === groupFilter);
+        await Promise.allSettled(
+          items.map((t) => fetchWithCache(t.key, t.url, { force: true }))
+        );
+      };
 
-    try {
-      await Promise.allSettled([runGroup('opendata'), runGroup('metro')]);
-      await new Promise((r) => setTimeout(r, 450));
-      await runGroup('tra');
-      await new Promise((r) => setTimeout(r, 450));
-      await runGroup('thsr');
+      try {
+        await Promise.allSettled([runGroup('opendata'), runGroup('metro')]);
+        await new Promise((r) => setTimeout(r, 450));
+        await runGroup('tra');
+        await new Promise((r) => setTimeout(r, 450));
+        await runGroup('thsr');
 
-      const now = Date.now();
-      lastSyncAtRef.current = now;
-      setLastSyncLabel(
-        new Date(now).toLocaleTimeString('zh-TW', { hour12: false })
-      );
-      setSyncVersion((v) => v + 1);
-      markJustUpdated();
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [fetchWithCache, markJustUpdated]);
+        const now = Date.now();
+        const label = new Date(now).toLocaleTimeString('zh-TW', { hour12: false });
+        lastSyncAtRef.current = now;
+        setLastSyncLabel(label);
+        setSyncVersion((v) => v + 1);
+        markJustUpdated();
+        if (broadcast && typeof BroadcastChannel !== 'undefined') {
+          try {
+            const ch = new BroadcastChannel('tw-transit-sync');
+            ch.postMessage({ type: 'SYNC_DONE', label });
+            ch.close();
+          } catch {
+            // ignore
+          }
+        }
+      } finally {
+        setIsSyncing(false);
+      }
+    },
+    [fetchWithCache, markJustUpdated]
+  );
 
   const triggerSyncAll = useCallback(async () => {
     setSyncCountdown(SYNC_INTERVAL_SEC);
-    await syncAllActive();
+    await syncAllActive(true);
   }, [syncAllActive]);
 
   const syncAllActiveRef = useRef(syncAllActive);
@@ -329,6 +349,25 @@ export function TransitStoreProvider({
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
+
+  // 跨分頁同步：任一分頁點擊「即時更新」或完成 30 秒同步時，其他分頁同步倒數與更新狀態
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return;
+    const ch = new BroadcastChannel('tw-transit-sync');
+    ch.onmessage = (ev: MessageEvent<{ type?: string; label?: string }>) => {
+      const msg = ev.data;
+      if (!msg?.type) return;
+      if (msg.type === 'SYNC_START') {
+        setSyncCountdown(SYNC_INTERVAL_SEC);
+        void syncAllActiveRef.current(false);
+      } else if (msg.type === 'SYNC_DONE') {
+        setSyncCountdown(SYNC_INTERVAL_SEC);
+        if (msg.label) setLastSyncLabel(msg.label);
+        markJustUpdated();
+      }
+    };
+    return () => ch.close();
+  }, [markJustUpdated]);
 
   const triggerFrontendRefresh = useCallback(() => {
     const now = Date.now();

@@ -483,13 +483,15 @@ function ThsrPageInner() {
             <span className="text-xs text-[#6b7487] dark:text-[#7a8296]">後 1 小時</span>
           </div>
 
-          <AutoRefreshBadge
-            intervalSeconds={30}
-            onRefresh={handleBackgroundRefresh}
-            onManualRefresh={handleManualFrontendRefresh}
-            isRefreshing={loading}
-            lastUpdated={frontendUpdatedAt || updatedAt}
-          />
+          <div className="ml-auto">
+            <AutoRefreshBadge
+              intervalSeconds={30}
+              onRefresh={handleBackgroundRefresh}
+              onManualRefresh={handleManualFrontendRefresh}
+              isRefreshing={loading}
+              lastUpdated={frontendUpdatedAt || updatedAt}
+            />
+          </div>
         </div>
       </div>
 
