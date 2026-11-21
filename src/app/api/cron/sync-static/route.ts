@@ -15,13 +15,18 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    const group = req.nextUrl.searchParams.get('group') || 'all';
     const [rail, opendata] = await Promise.all([
-      syncDailyStaticToDb(),
-      syncOpenDataStaticToDb(),
+      group === 'all' || group === 'rail'
+        ? syncDailyStaticToDb()
+        : Promise.resolve({}),
+      group === 'all' || group === 'opendata'
+        ? syncOpenDataStaticToDb()
+        : Promise.resolve({}),
     ]);
     const status = await getStaticSyncStatus();
     return NextResponse.json(
-      { ok: true, summary: { ...rail, ...opendata }, status },
+      { ok: true, group, summary: { ...rail, ...opendata }, status },
       { headers: { 'Cache-Control': 'no-store, max-age=0' } }
     );
   } catch (err) {

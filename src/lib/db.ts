@@ -127,7 +127,7 @@ export async function saveTraDailyToDb(
   const sql = getSql();
 
   const stationEntries = Array.from(byStation.entries());
-  const STATION_BATCH = 40;
+  const STATION_BATCH = 100;
   for (let i = 0; i < stationEntries.length; i += STATION_BATCH) {
     const chunk = stationEntries.slice(i, i + STATION_BATCH);
     const dates = chunk.map(() => serviceDate);
@@ -142,7 +142,7 @@ export async function saveTraDailyToDb(
     `;
   }
 
-  const TRAIN_BATCH = 150;
+  const TRAIN_BATCH = 350;
   for (let i = 0; i < trains.length; i += TRAIN_BATCH) {
     const chunk = trains.slice(i, i + TRAIN_BATCH);
     const dates = chunk.map(() => serviceDate);
@@ -243,7 +243,7 @@ export async function saveBusRouteStopsToDb(
   const sql = getSql();
 
   const entries = Array.from(stopsMap.entries());
-  const BATCH = 80;
+  const BATCH = 250;
   for (let i = 0; i < entries.length; i += BATCH) {
     const chunk = entries.slice(i, i + BATCH);
     const cities = chunk.map(() => city);

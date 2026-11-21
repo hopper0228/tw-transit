@@ -1768,9 +1768,16 @@ export async function syncDailyStaticToDb(): Promise<{
   }
 
   const metroSystems: Record<string, number> = {};
-  for (const sys of METRO_SYSTEMS) {
-    const map = await getMetroSystemTables(sys.id, true);
-    metroSystems[sys.id] = map.size;
+  const metroResults = await Promise.allSettled(
+    METRO_SYSTEMS.map(async (sys) => {
+      const map = await getMetroSystemTables(sys.id, true);
+      return [sys.id, map.size] as const;
+    })
+  );
+  for (const res of metroResults) {
+    if (res.status === 'fulfilled') {
+      metroSystems[res.value[0]] = res.value[1];
+    }
   }
 
   return {
