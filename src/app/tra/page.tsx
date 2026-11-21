@@ -93,33 +93,81 @@ function TraPageInner() {
 
   const loadTra = useCallback(
     async (signal?: AbortSignal, force = false) => {
-      const key = `tra:board:${station}`;
+      const boardKey = `tra:board:${station}`;
       const params = `mode=board&station=${encodeURIComponent(station)}`;
+      const liveKey = 'tra:live';
 
-      const cached = getCached<{
+      const cachedBoard = getCached<{
         trains?: TraTrainRow[];
         liveVehicles?: LiveRailVehicle[];
         updatedAt?: string;
-      }>(key);
+      }>(boardKey);
+      const cachedLive = getCached<{
+        liveByTrain?: Record<
+          string,
+          {
+            delayMinutes: number;
+            statusText: string;
+            currentStationId?: string;
+            currentLocation?: string;
+          }
+        >;
+        liveVehicles?: LiveRailVehicle[];
+        updatedAt?: string;
+      }>(liveKey);
 
-      if (cached && !force) {
-        setTrains(cached.data.trains || []);
-        setLiveVehicles(cached.data.liveVehicles || []);
-        setUpdatedAt(cached.data.updatedAt || '');
+      const applyLivePatch = (
+        baseTrains: TraTrainRow[],
+        liveMap?: Record<
+          string,
+          {
+            delayMinutes: number;
+            statusText: string;
+            currentStationId?: string;
+            currentLocation?: string;
+          }
+        >
+      ) => {
+        if (!liveMap || Object.keys(liveMap).length === 0) return baseTrains;
+        return baseTrains.map((t) => {
+          const patch = liveMap[t.trainNo];
+          return patch ? { ...t, ...patch } : t;
+        });
+      };
+
+      if (cachedBoard && !force) {
+        setTrains(applyLivePatch(cachedBoard.data.trains || [], cachedLive?.data?.liveByTrain));
+        setLiveVehicles(cachedLive?.data?.liveVehicles || cachedBoard.data.liveVehicles || []);
+        setUpdatedAt(cachedLive?.data?.updatedAt || cachedBoard.data.updatedAt || '');
         setLoading(false);
-      } else {
+      } else if (!cachedBoard) {
         setLoading(true);
       }
 
       try {
-        const data = await fetchWithCache<{
-          trains?: TraTrainRow[];
-          liveVehicles?: LiveRailVehicle[];
-          updatedAt?: string;
-        }>(key, `/api/transit/tra?${params}`, { signal, force });
-        setTrains(data.trains || []);
-        setLiveVehicles(data.liveVehicles || []);
-        setUpdatedAt(data.updatedAt || '');
+        const [boardData, liveData] = await Promise.all([
+          fetchWithCache<{
+            trains?: TraTrainRow[];
+            liveVehicles?: LiveRailVehicle[];
+            updatedAt?: string;
+          }>(boardKey, `/api/transit/tra?${params}`, { signal }),
+          fetchWithCache<{
+            liveByTrain?: Record<
+              string,
+              {
+                delayMinutes: number;
+                statusText: string;
+                currentStationId?: string;
+                currentLocation?: string;
+              }
+            >;
+            liveVehicles?: LiveRailVehicle[];
+            updatedAt?: string;
+          }>(liveKey, '/api/transit/tra?mode=live', { signal, force }),
+        ]);
+        setTrains(applyLivePatch(boardData.trains || [], liveData.liveByTrain));
+        setLiveVehicles(liveData.liveVehicles?.length ? liveData.liveVehicles : boardData.liveVehicles || []);
+        setUpdatedAt(liveData.updatedAt || boardData.updatedAt || '');
       } catch {
         // ignore abort/network error
       } finally {
@@ -252,6 +300,14 @@ function TraPageInner() {
       for (const no of missing) inFlightStopsRef.current.delete(no);
     };
   }, [filteredTrains, getCached, fetchWithCache]);
+
+  const activeSelectedTrain = useMemo(
+    () =>
+      selectedTrain
+        ? trains.find((t) => t.trainNo === selectedTrain.trainNo) ?? selectedTrain
+        : null,
+    [selectedTrain, trains]
+  );
 
   const targetStationName = useMemo(
     () => TRA_STATIONS.find((s) => s.id === targetStation)?.name || '',
@@ -619,25 +675,29 @@ function TraPageInner() {
       )}
 
       <DetailDrawer
-        open={Boolean(selectedTrain)}
+        open={Boolean(activeSelectedTrain)}
         onClose={() => setSelectedTrain(null)}
-        badge={selectedTrain ? `${selectedTrain.trainType} ${selectedTrain.trainNo}` : undefined}
+        badge={
+          activeSelectedTrain
+            ? `${activeSelectedTrain.trainType} ${activeSelectedTrain.trainNo}`
+            : undefined
+        }
         title={
-          selectedTrain
-            ? `${selectedTrain.originStation || TRA_STATIONS.find((s) => s.id === station)?.name || station} → ${selectedTrain.destinationStation}`
+          activeSelectedTrain
+            ? `${activeSelectedTrain.originStation || TRA_STATIONS.find((s) => s.id === station)?.name || station} → ${activeSelectedTrain.destinationStation}`
             : ''
         }
         subtitle={
-          selectedTrain
-            ? `${selectedTrain.bound === 'north' ? '北上' : '南下'} · ${selectedTrain.statusText}`
+          activeSelectedTrain
+            ? `${activeSelectedTrain.bound === 'north' ? '北上' : '南下'} · ${activeSelectedTrain.statusText}`
             : undefined
         }
       >
-        {selectedTrain && (() => {
+        {activeSelectedTrain && (() => {
           const stops = selectedStops;
           const originIdx = stops.findIndex((s) => s.stationId === station);
 
-          const rawLoc = selectedTrain.currentLocation || '';
+          const rawLoc = activeSelectedTrain.currentLocation || '';
           const liveAction = rawLoc.includes('進站')
             ? '進站中'
             : rawLoc.includes('到站') || rawLoc.includes('停靠')
@@ -647,12 +707,12 @@ function TraPageInner() {
                 : '';
 
           const fallbackPos =
-            !selectedTrain.currentStationId && stops.length > 0
-              ? resolveTrainStopPosition(stops, nowMs, selectedTrain.delayMinutes)
+            !activeSelectedTrain.currentStationId && stops.length > 0
+              ? resolveTrainStopPosition(stops, nowMs, activeSelectedTrain.delayMinutes)
               : null;
 
           const activeTrainStationId =
-            selectedTrain.currentStationId || fallbackPos?.stationId;
+            activeSelectedTrain.currentStationId || fallbackPos?.stationId;
           const trainAction = liveAction || fallbackPos?.action || '';
 
           const liveIdx = activeTrainStationId
@@ -684,9 +744,9 @@ function TraPageInner() {
 
           return (
             <div className="space-y-3">
-              {selectedTrain.note && (
+              {activeSelectedTrain.note && (
                 <div className="text-xs text-[#6b7487] dark:text-[#7a8296]">
-                  {selectedTrain.note}
+                  {activeSelectedTrain.note}
                 </div>
               )}
               <ul className="divide-y divide-slate-900/8 rounded-lg border border-slate-900/8 dark:divide-slate-100/8 dark:border-slate-100/8">

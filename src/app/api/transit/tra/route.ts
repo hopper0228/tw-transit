@@ -1,10 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { TRA_STATIONS } from '@/lib/mock-data';
-import { getRealTraData, getTraTrainStops, getTraTrainsStops } from '@/lib/rail-live';
+import {
+  getRealTraData,
+  getRealTraLive,
+  getTraTrainStops,
+  getTraTrainsStops,
+} from '@/lib/rail-live';
 
 export async function GET(req: NextRequest) {
   const modeParam = req.nextUrl.searchParams.get('mode');
   const trainNo = req.nextUrl.searchParams.get('trainNo') || '';
+
+  if (modeParam === 'live') {
+    const live = await getRealTraLive();
+    const cacheHeader =
+      Object.keys(live.liveByTrain).length > 0
+        ? 'public, s-maxage=10, stale-while-revalidate=10'
+        : 'no-store, max-age=0';
+    return NextResponse.json(live, {
+      headers: { 'Cache-Control': cacheHeader },
+    });
+  }
 
   if (modeParam === 'trains') {
     const rawNos = req.nextUrl.searchParams.get('trainNos') || '';
@@ -44,7 +60,7 @@ export async function GET(req: NextRequest) {
   const result = await getRealTraData(mode, station, from, to);
   const cacheHeader =
     result.trains.length > 0
-      ? 'public, s-maxage=15, stale-while-revalidate=30'
+      ? 'public, s-maxage=10, stale-while-revalidate=10'
       : 'no-store, max-age=0';
 
   return NextResponse.json(

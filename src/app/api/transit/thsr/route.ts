@@ -1,11 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { THSR_STATIONS } from '@/lib/mock-data';
-import { getRealThsrData, getThsrTrainStops, getThsrTrainsStops } from '@/lib/rail-live';
+import {
+  getRealThsrData,
+  getRealThsrLive,
+  getThsrTrainStops,
+  getThsrTrainsStops,
+} from '@/lib/rail-live';
 
 export async function GET(req: NextRequest) {
   const modeParam = req.nextUrl.searchParams.get('mode');
   const from = req.nextUrl.searchParams.get('from') || '1000';
   const trainNo = req.nextUrl.searchParams.get('trainNo') || '';
+
+  if (modeParam === 'live') {
+    const live = await getRealThsrLive(from);
+    const cacheHeader =
+      Object.keys(live.seatByTrain).length > 0
+        ? 'public, s-maxage=10, stale-while-revalidate=10'
+        : 'no-store, max-age=0';
+    return NextResponse.json(live, {
+      headers: { 'Cache-Control': cacheHeader },
+    });
+  }
 
   if (modeParam === 'trains') {
     const rawNos = req.nextUrl.searchParams.get('trainNos') || '';
@@ -42,7 +58,7 @@ export async function GET(req: NextRequest) {
   const result = await getRealThsrData(from, to || undefined);
   const cacheHeader =
     result.trains.length > 0
-      ? 'public, s-maxage=15, stale-while-revalidate=30'
+      ? 'public, s-maxage=10, stale-while-revalidate=10'
       : 'no-store, max-age=0';
 
   return NextResponse.json(

@@ -60,11 +60,10 @@ const MAX_CACHE_ENTRIES = 30;
 const TransitStoreContext = createContext<TransitStoreContextValue | null>(null);
 
 function resolveGroupFromKey(key: string): { slot: string; group: ActiveGroup } | null {
-  if (key.startsWith('tra:train:') || key.startsWith('tra:trains:')) return null;
-  if (key.startsWith('thsr:train:') || key.startsWith('thsr:trains:')) return null;
+  if (key.startsWith('tra:live')) return { slot: 'tra', group: 'tra' };
+  if (key.startsWith('thsr:live:')) return { slot: 'thsr', group: 'thsr' };
+  if (key.startsWith('tra:') || key.startsWith('thsr:')) return null;
   if (key.startsWith('metro:')) return { slot: 'metro', group: 'metro' };
-  if (key.startsWith('tra:')) return { slot: 'tra', group: 'tra' };
-  if (key.startsWith('thsr:')) return { slot: 'thsr', group: 'thsr' };
   if (key.startsWith('bus:detail:')) return { slot: 'bus:detail', group: 'opendata' };
   if (key.startsWith('bus:')) return { slot: 'bus:list', group: 'opendata' };
   if (key.startsWith('youbike:')) return { slot: 'youbike', group: 'opendata' };
@@ -75,7 +74,15 @@ function resolveGroupFromKey(key: string): { slot: string; group: ActiveGroup } 
 function countPayloadItems(data: unknown): number | null {
   if (!data || typeof data !== 'object') return null;
   const obj = data as Record<string, unknown>;
-  for (const field of ['trains', 'stations', 'lots', 'routes', 'stops']) {
+  for (const field of [
+    'trains',
+    'stations',
+    'lots',
+    'routes',
+    'stops',
+    'liveByTrain',
+    'seatByTrain',
+  ]) {
     const val = obj[field];
     if (Array.isArray(val)) return val.length;
     if (val && typeof val === 'object') return Object.keys(val).length;
@@ -391,6 +398,10 @@ export function TransitStoreProvider({
         `tra:board:${traSt}`,
         `/api/transit/tra?mode=board&station=${encodeURIComponent(traSt)}`
       ).catch(() => {});
+      void fetchWithCache(
+        'tra:live',
+        '/api/transit/tra?mode=live'
+      ).catch(() => {});
     }, 600);
 
     const nearestThsr = coords
@@ -401,6 +412,10 @@ export function TransitStoreProvider({
       void fetchWithCache(
         `thsr:board:${thsrFrom}`,
         `/api/transit/thsr?from=${encodeURIComponent(thsrFrom)}`
+      ).catch(() => {});
+      void fetchWithCache(
+        `thsr:live:${thsrFrom}`,
+        `/api/transit/thsr?mode=live&from=${encodeURIComponent(thsrFrom)}`
       ).catch(() => {});
     }, 1200);
 

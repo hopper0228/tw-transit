@@ -104,35 +104,77 @@ function ThsrPageInner() {
 
   const loadThsr = useCallback(
     async (signal?: AbortSignal, force = false) => {
-      const key = `thsr:board:${from}`;
-      const cached = getCached<{
+      const boardKey = `thsr:board:${from}`;
+      const liveKey = `thsr:live:${from}`;
+      const cachedBoard = getCached<{
         trains?: ThsrTrainRow[];
         liveVehicles?: LiveRailVehicle[];
         updatedAt?: string;
-      }>(key);
+      }>(boardKey);
+      const cachedLive = getCached<{
+        seatByTrain?: Record<
+          string,
+          {
+            standardSeatStatus: 'available' | 'limited' | 'full';
+            businessSeatStatus: 'available' | 'limited' | 'full';
+          }
+        >;
+        updatedAt?: string;
+      }>(liveKey);
 
-      if (cached && !force) {
-        setTrains(cached.data.trains || []);
-        setLiveVehicles(cached.data.liveVehicles || []);
-        setUpdatedAt(cached.data.updatedAt || '');
+      const applySeatPatch = (
+        baseTrains: ThsrTrainRow[],
+        seatMap?: Record<
+          string,
+          {
+            standardSeatStatus: 'available' | 'limited' | 'full';
+            businessSeatStatus: 'available' | 'limited' | 'full';
+          }
+        >
+      ) => {
+        if (!seatMap || Object.keys(seatMap).length === 0) return baseTrains;
+        return baseTrains.map((t) => {
+          const patch = seatMap[t.trainNo];
+          return patch ? { ...t, ...patch } : t;
+        });
+      };
+
+      if (cachedBoard && !force) {
+        setTrains(applySeatPatch(cachedBoard.data.trains || [], cachedLive?.data?.seatByTrain));
+        setLiveVehicles(cachedBoard.data.liveVehicles || []);
+        setUpdatedAt(cachedLive?.data?.updatedAt || cachedBoard.data.updatedAt || '');
         setLoading(false);
-      } else {
+      } else if (!cachedBoard) {
         setLoading(true);
       }
 
       try {
-        const data = await fetchWithCache<{
-          trains?: ThsrTrainRow[];
-          liveVehicles?: LiveRailVehicle[];
-          updatedAt?: string;
-        }>(
-          key,
-          `/api/transit/thsr?from=${encodeURIComponent(from)}`,
-          { signal, force }
-        );
-        setTrains(data.trains || []);
-        setLiveVehicles(data.liveVehicles || []);
-        setUpdatedAt(data.updatedAt || '');
+        const [boardData, liveData] = await Promise.all([
+          fetchWithCache<{
+            trains?: ThsrTrainRow[];
+            liveVehicles?: LiveRailVehicle[];
+            updatedAt?: string;
+          }>(boardKey, `/api/transit/thsr?from=${encodeURIComponent(from)}`, {
+            signal,
+          }),
+          fetchWithCache<{
+            seatByTrain?: Record<
+              string,
+              {
+                standardSeatStatus: 'available' | 'limited' | 'full';
+                businessSeatStatus: 'available' | 'limited' | 'full';
+              }
+            >;
+            updatedAt?: string;
+          }>(
+            liveKey,
+            `/api/transit/thsr?mode=live&from=${encodeURIComponent(from)}`,
+            { signal, force }
+          ),
+        ]);
+        setTrains(applySeatPatch(boardData.trains || [], liveData.seatByTrain));
+        setLiveVehicles(boardData.liveVehicles || []);
+        setUpdatedAt(liveData.updatedAt || boardData.updatedAt || '');
       } catch {
         // ignore abort/network error
       } finally {
@@ -208,6 +250,14 @@ function ThsrPageInner() {
       controller.abort();
     };
   }, [selectedTrain, from, preloadedStops, getCached, fetchWithCache]);
+
+  const activeSelectedTrain = useMemo(
+    () =>
+      selectedTrain
+        ? trains.find((t) => t.trainNo === selectedTrain.trainNo) ?? selectedTrain
+        : null,
+    [selectedTrain, trains]
+  );
 
   const fromName = THSR_STATIONS.find((s) => s.id === from)?.name || from;
   const targetName = THSR_STATIONS.find((s) => s.id === targetStation)?.name || '';
@@ -627,21 +677,21 @@ function ThsrPageInner() {
       )}
 
       <DetailDrawer
-        open={Boolean(selectedTrain)}
+        open={Boolean(activeSelectedTrain)}
         onClose={() => setSelectedTrain(null)}
-        badge={selectedTrain ? `高鐵 ${selectedTrain.trainNo}` : undefined}
+        badge={activeSelectedTrain ? `高鐵 ${activeSelectedTrain.trainNo}` : undefined}
         title={
-          selectedTrain
-            ? `${selectedTrain.originStation || fromName} → ${selectedTrain.destinationStation}`
+          activeSelectedTrain
+            ? `${activeSelectedTrain.originStation || fromName} → ${activeSelectedTrain.destinationStation}`
             : ''
         }
         subtitle={
-          selectedTrain
-            ? `${selectedTrain.bound === 'north' ? '北上' : '南下'} · ${selectedTrain.stopPattern} · 自由座 ${selectedTrain.nonReservedCars}`
+          activeSelectedTrain
+            ? `${activeSelectedTrain.bound === 'north' ? '北上' : '南下'} · ${activeSelectedTrain.stopPattern} · 自由座 ${activeSelectedTrain.nonReservedCars}`
             : undefined
         }
       >
-        {selectedTrain && (() => {
+        {activeSelectedTrain && (() => {
           const stops = selectedStops;
           const originIdx = stops.findIndex((s) => s.stationId === from);
           const trainPos = resolveTrainStopPosition(stops, nowMs, 0);

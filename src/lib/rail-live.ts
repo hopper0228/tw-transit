@@ -1415,3 +1415,157 @@ export async function getTraTrainsStops(
   }
   return result;
 }
+
+export interface TraLivePatch {
+  delayMinutes: number;
+  statusText: string;
+  currentStationId?: string;
+  currentLocation?: string;
+}
+
+/**
+ * 輕量台鐵即時動態端點：只抓 TrainLiveBoard（不重組全日時刻表），供每 30 秒高速輪詢
+ */
+export async function getRealTraLive(): Promise<{
+  liveByTrain: Record<string, TraLivePatch>;
+  liveVehicles: LiveRailVehicle[];
+  updatedAt: string;
+  sourceUpdatedAt: number;
+  source: 'tdx' | 'mock';
+}> {
+  const { timeStr } = getTaipeiNow();
+  if (!isTdxConfigured()) {
+    return {
+      liveByTrain: {},
+      liveVehicles: [],
+      updatedAt: timeStr,
+      sourceUpdatedAt: Date.now(),
+      source: 'mock',
+    };
+  }
+
+  try {
+    const liveData = await fetchTdx<{
+      UpdateTime?: string;
+      SrcUpdateTime?: string;
+      TrainLiveBoards?: TdxTraTrainLive[];
+    }>('/v3/Rail/TRA/TrainLiveBoard?%24format=JSON', 10);
+
+    const liveList = Array.isArray(liveData?.TrainLiveBoards)
+      ? liveData.TrainLiveBoards
+      : [];
+    const liveByTrain: Record<string, TraLivePatch> = {};
+    const liveVehicles: LiveRailVehicle[] = [];
+
+    for (const item of liveList) {
+      const delay = item.DelayTime ?? 0;
+      const statusLabel =
+        item.TrainStationStatus === 0
+          ? '進站中'
+          : item.TrainStationStatus === 1
+            ? '已到站'
+            : '已發車';
+      const currentLocation = `${item.StationName?.Zh_tw || item.StationID}（${statusLabel}）`;
+      liveByTrain[item.TrainNo] = {
+        delayMinutes: delay,
+        statusText: delay > 0 ? `晚 ${delay} 分` : '準點',
+        currentStationId: item.StationID,
+        currentLocation,
+      };
+
+      const coord = getTraStationCoord(item.StationID);
+      if (!coord) continue;
+      const tType = normalizeTraType(item.TrainTypeName?.Zh_tw);
+      const color =
+        tType === '新自強' || tType === '普悠瑪' || tType === '太魯閣'
+          ? '#e11d48'
+          : tType === '自強'
+            ? '#f97316'
+            : '#4f46e5';
+      liveVehicles.push({
+        id: `tra-live-${item.TrainNo}`,
+        label: `${tType} ${item.TrainNo}`,
+        title: `台鐵 ${tType} ${item.TrainNo} 次`,
+        subtitle: `目前位置：${item.StationName?.Zh_tw || item.StationID} (${statusLabel})<br/>${
+          delay > 0 ? `晚 ${delay} 分鐘` : '準點'
+        }`,
+        lat: coord[0],
+        lng: coord[1],
+        color,
+      });
+    }
+
+    return {
+      liveByTrain,
+      liveVehicles,
+      updatedAt: timeStr,
+      sourceUpdatedAt: Date.now(),
+      source: 'tdx',
+    };
+  } catch {
+    return {
+      liveByTrain: {},
+      liveVehicles: [],
+      updatedAt: timeStr,
+      sourceUpdatedAt: Date.now(),
+      source: 'tdx',
+    };
+  }
+}
+
+export interface ThsrLivePatch {
+  standardSeatStatus: 'available' | 'limited' | 'full';
+  businessSeatStatus: 'available' | 'limited' | 'full';
+}
+
+/**
+ * 輕量高鐵即時餘位端點：只抓 AvailableSeatStatusList（不重抓全日時刻表），供每 30 秒高速輪詢
+ */
+export async function getRealThsrLive(from: string): Promise<{
+  seatByTrain: Record<string, ThsrLivePatch>;
+  updatedAt: string;
+  sourceUpdatedAt: number;
+  source: 'tdx' | 'mock';
+}> {
+  const { timeStr } = getTaipeiNow();
+  if (!isTdxConfigured()) {
+    return {
+      seatByTrain: {},
+      updatedAt: timeStr,
+      sourceUpdatedAt: Date.now(),
+      source: 'mock',
+    };
+  }
+
+  try {
+    const seatData = await fetchTdx<TdxThsrSeatList>(
+      `/v2/Rail/THSR/AvailableSeatStatusList/${encodeURIComponent(from)}?%24format=JSON`,
+      15
+    );
+    const seatByTrain: Record<string, ThsrLivePatch> = {};
+
+    for (const s of seatData?.AvailableSeats || []) {
+      const stops = s.StopStations || [];
+      if (!s.TrainNo || stops.length === 0) continue;
+      const firstStop = stops[0];
+      seatByTrain[s.TrainNo] = {
+        standardSeatStatus: mapSeatCode(firstStop?.StandardSeatStatus),
+        businessSeatStatus: mapSeatCode(firstStop?.BusinessSeatStatus),
+      };
+    }
+
+    return {
+      seatByTrain,
+      updatedAt: timeStr,
+      sourceUpdatedAt: Date.now(),
+      source: 'tdx',
+    };
+  } catch {
+    return {
+      seatByTrain: {},
+      updatedAt: timeStr,
+      sourceUpdatedAt: Date.now(),
+      source: 'tdx',
+    };
+  }
+}
