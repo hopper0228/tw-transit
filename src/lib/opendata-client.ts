@@ -1489,13 +1489,15 @@ async function syncTdxParkingBatch(batch: 1 | 2 | 3): Promise<{
       })),
       dateStr
     );
-    await saveRailSnapshotToDb(
-      `parking:tdx:b${batch}`,
-      `parking_tdx_b${batch}`,
-      dateStr,
-      out,
-      out.length
-    );
+    if (out.length <= 20000) {
+      await saveRailSnapshotToDb(
+        `parking:tdx:b${batch}`,
+        `parking_tdx_b${batch}`,
+        dateStr,
+        out,
+        out.length
+      );
+    }
   }
   return { total: out.length, counts };
 }

@@ -323,7 +323,7 @@ export async function upsertParkingLotsToDb(
   if (!isDbConfigured() || lots.length === 0) return;
   await ensureStaticTables();
   const sql = getSql();
-  const BATCH = 1000;
+  const BATCH = 2500;
   for (let i = 0; i < lots.length; i += BATCH) {
     const chunk = lots.slice(i, i + BATCH);
     const ids = chunk.map((l) => l.carParkId);
@@ -338,29 +338,37 @@ export async function upsertParkingLotsToDb(
     const labels = chunk.map((l) => l.updatedAt || '依現場為準');
     const dates = chunk.map(() => serviceDate);
 
-    await sql`
-      INSERT INTO parking_lots_static (
-        car_park_id, city, name, address, lat, lng,
-        total_spaces, fare_description, parking_type, updated_at_label, service_date
-      )
-      SELECT id, c, n, a, la, ln, tot, f, tp, lb, d
-      FROM UNNEST(
-        ${ids}::text[], ${cities}::text[], ${names}::text[], ${addrs}::text[],
-        ${lats}::double precision[], ${lngs}::double precision[],
-        ${totals}::int[], ${fares}::text[], ${types}::text[], ${labels}::text[], ${dates}::text[]
-      ) AS t(id, c, n, a, la, ln, tot, f, tp, lb, d)
-      ON CONFLICT (car_park_id) DO UPDATE SET
-        city = EXCLUDED.city,
-        name = EXCLUDED.name,
-        address = EXCLUDED.address,
-        lat = EXCLUDED.lat,
-        lng = EXCLUDED.lng,
-        total_spaces = EXCLUDED.total_spaces,
-        fare_description = EXCLUDED.fare_description,
-        parking_type = EXCLUDED.parking_type,
-        updated_at_label = EXCLUDED.updated_at_label,
-        service_date = EXCLUDED.service_date
-    `;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await sql`
+          INSERT INTO parking_lots_static (
+            car_park_id, city, name, address, lat, lng,
+            total_spaces, fare_description, parking_type, updated_at_label, service_date
+          )
+          SELECT id, c, n, a, la, ln, tot, f, tp, lb, d
+          FROM UNNEST(
+            ${ids}::text[], ${cities}::text[], ${names}::text[], ${addrs}::text[],
+            ${lats}::double precision[], ${lngs}::double precision[],
+            ${totals}::int[], ${fares}::text[], ${types}::text[], ${labels}::text[], ${dates}::text[]
+          ) AS t(id, c, n, a, la, ln, tot, f, tp, lb, d)
+          ON CONFLICT (car_park_id) DO UPDATE SET
+            city = EXCLUDED.city,
+            name = EXCLUDED.name,
+            address = EXCLUDED.address,
+            lat = EXCLUDED.lat,
+            lng = EXCLUDED.lng,
+            total_spaces = EXCLUDED.total_spaces,
+            fare_description = EXCLUDED.fare_description,
+            parking_type = EXCLUDED.parking_type,
+            updated_at_label = EXCLUDED.updated_at_label,
+            service_date = EXCLUDED.service_date
+        `;
+        break;
+      } catch (err) {
+        if (attempt === 1) throw err;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    }
   }
 }
 
