@@ -705,6 +705,7 @@ interface TdxBikeStationRaw {
 
 interface TdxBikeAvailRaw {
   StationUID: string;
+  StationID?: string;
   ServiceStatus?: number;
   AvailableRentBikes?: number;
   AvailableReturnBikes?: number;
@@ -727,8 +728,33 @@ const TDX_POI_BATCH_2: Array<{ code: string; label: string }> = [
   { code: 'PingtungCounty', label: '屏東' },
 ];
 
+const YB2_AREA_MAP: Record<string, { city: string; label: string }> = {
+  '07': { city: 'Taoyuan', label: '桃園' },
+  '09': { city: 'Hsinchu', label: '新竹' },
+  '10': { city: 'Hsinchu', label: '竹科' },
+  '0B': { city: 'HsinchuCounty', label: '新竹縣' },
+  '0A': { city: 'MiaoliCounty', label: '苗栗' },
+  '01': { city: 'Taichung', label: '台中' },
+  '08': { city: 'Chiayi', label: '嘉義' },
+  '11': { city: 'Chiayi', label: '嘉義縣' },
+  '13': { city: 'Tainan', label: '台南' },
+  '12': { city: 'Kaohsiung', label: '高雄' },
+  '14': { city: 'PingtungCounty', label: '屏東' },
+  '15': { city: 'TaitungCounty', label: '台東' },
+};
+
+interface Yb2MinStationRaw {
+  area_code: string;
+  status: number;
+  station_no: string;
+  name_tw: string;
+  district_tw: string;
+  address_tw: string;
+  lat: string;
+  lng: string;
+}
+
 async function getTdxBikeStations(forceRefresh = false): Promise<YouBikeStation[]> {
-  if (!isTdxConfigured()) return [];
   const cacheKey = 'tdx-youbike-static';
   const now = Date.now();
   if (!forceRefresh) {
@@ -736,6 +762,14 @@ async function getTdxBikeStations(forceRefresh = false): Promise<YouBikeStation[
     if (hit && hit.expiresAt > now) return hit.data;
 
     if (isDbConfigured()) {
+      const dbAll = await getRailSnapshotFromDb<YouBikeStation[]>(
+        'youbike:yb2:all',
+        getTaipeiDateStr()
+      );
+      if (Array.isArray(dbAll) && dbAll.length > 0) {
+        cache.set(cacheKey, { data: dbAll, expiresAt: now + 3600 * 1000 });
+        return dbAll;
+      }
       const [b1, b2] = await Promise.all([
         getRailSnapshotFromDb<YouBikeStation[]>('youbike:tdx:b1', getTaipeiDateStr()),
         getRailSnapshotFromDb<YouBikeStation[]>('youbike:tdx:b2', getTaipeiDateStr()),
@@ -750,71 +784,54 @@ async function getTdxBikeStations(forceRefresh = false): Promise<YouBikeStation[
   return [];
 }
 
-async function syncTdxBikeBatch(batch: 1 | 2): Promise<{
+async function syncYb2AllToDb(): Promise<{
   total: number;
   counts: Record<string, number>;
 }> {
-  if (!isTdxConfigured()) return { total: 0, counts: {} };
-  const cities = batch === 1 ? TDX_POI_BATCH_1 : TDX_POI_BATCH_2;
-  const dateStr = getTaipeiDateStr();
-  const prevList = isDbConfigured()
-    ? (await getRailSnapshotFromDb<YouBikeStation[]>(`youbike:tdx:b${batch}`, dateStr)) || []
-    : [];
+  const res = await fetch('https://apis.youbike.com.tw/json/station-min-yb2.json', {
+    cache: 'no-store',
+  });
+  if (!res.ok) return { total: 0, counts: {} };
+  const raw = (await res.json()) as Yb2MinStationRaw[];
+  if (!Array.isArray(raw)) return { total: 0, counts: {} };
 
+  const out: YouBikeStation[] = [];
   const counts: Record<string, number> = {};
-  const byCity = new Map<string, YouBikeStation[]>();
-  for (const item of prevList) {
-    const arr = byCity.get(item.city) || [];
-    arr.push(item);
-    byCity.set(item.city, arr);
+  for (const st of raw) {
+    const meta = YB2_AREA_MAP[st.area_code];
+    if (!meta) continue; // 00(台北) 與 05(新北) 已由雙北即時 API 提供
+    const lat = Number(st.lat);
+    const lng = Number(st.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    counts[meta.city] = (counts[meta.city] || 0) + 1;
+    out.push({
+      stationUid: st.station_no,
+      stationName: (st.name_tw || st.station_no).replace(/^YouBike2\.0_/, ''),
+      city: meta.city,
+      address: `${meta.label} ${st.district_tw || ''} · ${st.address_tw || ''}`,
+      lat,
+      lng,
+      totalDocks: 0,
+      availableBikes20: 0,
+      availableBikes20E: 0,
+      availableReturnDocks: 0,
+      serviceStatus: st.status === 1 ? 1 : 0,
+      updatedAt: '靜態站點',
+    });
   }
 
-  for (let i = 0; i < cities.length; i++) {
-    const c = cities[i];
-    if (i > 0) await new Promise((r) => setTimeout(r, 1500));
-    const raw = await fetchTdx<TdxBikeStationRaw[]>(
-      `/v2/Bike/Station/City/${c.code}?%24format=JSON`,
-      0
-    ).catch(() => [] as TdxBikeStationRaw[]);
-
-    const cityOut: YouBikeStation[] = [];
-    for (const st of Array.isArray(raw) ? raw : []) {
-      const lat = Number(st.StationPosition?.PositionLat);
-      const lng = Number(st.StationPosition?.PositionLon);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      cityOut.push({
-        stationUid: st.StationUID,
-        stationName: (st.StationName?.Zh_tw || st.StationUID).replace(/^YouBike2\.0_/, ''),
-        city: c.code,
-        address: `${c.label} · ${st.StationAddress?.Zh_tw || ''}`,
-        lat,
-        lng,
-        totalDocks: Number(st.BikesCapacity || 0),
-        availableBikes20: 0,
-        availableBikes20E: 0,
-        availableReturnDocks: 0,
-        serviceStatus: 1,
-        updatedAt: '靜態站點',
-      });
-    }
-    if (cityOut.length > 0) {
-      byCity.set(c.code, cityOut);
-      counts[c.code] = cityOut.length;
-    } else {
-      counts[c.code] = byCity.get(c.code)?.length || 0;
-    }
-  }
-
-  const out = Array.from(byCity.values()).flat();
   cache.delete('tdx-youbike-static');
-  if (out.length > 0 && isDbConfigured()) {
-    await saveRailSnapshotToDb(
-      `youbike:tdx:b${batch}`,
-      `youbike_tdx_b${batch}`,
-      dateStr,
-      out,
-      out.length
-    );
+  if (out.length > 0) {
+    cache.set('tdx-youbike-static', { data: out, expiresAt: Date.now() + 3600 * 1000 });
+    if (isDbConfigured()) {
+      await saveRailSnapshotToDb(
+        'youbike:yb2:all',
+        'youbike_yb2_all',
+        getTaipeiDateStr(),
+        out,
+        out.length
+      );
+    }
   }
   return { total: out.length, counts };
 }
@@ -841,6 +858,7 @@ async function enrichTdxBikeAvailability(
       ).catch(() => [] as TdxBikeAvailRaw[]);
       for (const r of Array.isArray(rows) ? rows : []) {
         if (r.StationUID) availMap.set(r.StationUID, r);
+        if (r.StationID) availMap.set(r.StationID, r);
       }
     })
   );
@@ -1288,16 +1306,9 @@ export async function syncTdxBikeStaticToDb(batch?: 1 | 2): Promise<{
   tdxBikeStations: number;
   tdxBikeCounts?: Record<string, number>;
 }> {
-  if (batch === 1 || batch === 2) {
-    const r = await syncTdxBikeBatch(batch);
-    return { tdxBikeStations: r.total, tdxBikeCounts: r.counts };
-  }
-  const r1 = await syncTdxBikeBatch(1);
-  const r2 = await syncTdxBikeBatch(2);
-  return {
-    tdxBikeStations: r1.total + r2.total,
-    tdxBikeCounts: { ...r1.counts, ...r2.counts },
-  };
+  void batch;
+  const r = await syncYb2AllToDb();
+  return { tdxBikeStations: r.total, tdxBikeCounts: r.counts };
 }
 
 export async function syncTdxParkingStaticToDb(batch?: 1 | 2): Promise<{
