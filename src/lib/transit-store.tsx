@@ -49,7 +49,7 @@ interface TransitStoreContextValue {
 }
 
 const SYNC_INTERVAL_SEC = 30;
-const SESSION_STORAGE_KEY = 'tw-transit-cache-v1';
+const SESSION_STORAGE_KEY = 'tw-transit-cache-v2';
 const SESSION_MAX_AGE_MS = 5 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 30;
 
@@ -105,10 +105,22 @@ export function TransitStoreProvider({
   const persistToSession = useCallback(() => {
     if (typeof window === 'undefined') return;
     try {
-      const entries = Array.from(cacheRef.current.entries())
-        .sort((a, b) => b[1].fetchedAt - a[1].fetchedAt)
-        .slice(0, MAX_CACHE_ENTRIES);
-      window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(entries));
+      const compactEntries: [string, CacheEntry][] = [];
+      const sorted = Array.from(cacheRef.current.entries()).sort(
+        (a, b) => b[1].fetchedAt - a[1].fetchedAt
+      );
+      for (const item of sorted) {
+        if (compactEntries.length >= MAX_CACHE_ENTRIES) break;
+        const serialized = JSON.stringify(item);
+        // 避免大型時刻表（如台鐵全天 1MB+）塞爆 5MB sessionStorage 配額
+        if (serialized.length <= 280_000) {
+          compactEntries.push(item);
+        }
+      }
+      window.sessionStorage.setItem(
+        SESSION_STORAGE_KEY,
+        JSON.stringify(compactEntries)
+      );
     } catch {
       // sessionStorage quota exceeded or unavailable
     }
@@ -138,6 +150,10 @@ export function TransitStoreProvider({
       const existing = cacheRef.current.get(key);
       if (existing && shouldKeepOldData(existing.data, data)) {
         return existing.data;
+      }
+      // 若首次即遇冷啟動/429 回傳空資料，不寫入快取，讓下次切頁可自動重抓
+      if (countPayloadItems(data) === 0) {
+        return data;
       }
       if (cacheRef.current.size >= MAX_CACHE_ENTRIES && !cacheRef.current.has(key)) {
         const oldestKey = cacheRef.current.keys().next().value;
