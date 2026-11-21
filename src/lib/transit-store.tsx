@@ -65,7 +65,7 @@ function resolveGroupFromKey(key: string): { slot: string; group: ActiveGroup } 
   if (key.startsWith('tra:') || key.startsWith('thsr:')) return null;
   if (key.startsWith('metro:')) return { slot: 'metro', group: 'metro' };
   if (key.startsWith('bus:detail:')) return { slot: 'bus:detail', group: 'opendata' };
-  if (key.startsWith('bus:')) return { slot: 'bus:list', group: 'opendata' };
+  if (key.startsWith('bus:')) return null;
   if (key.startsWith('youbike:')) return { slot: 'youbike', group: 'opendata' };
   if (key.startsWith('parking:')) return { slot: 'parking', group: 'opendata' };
   return { slot: key, group: 'opendata' };

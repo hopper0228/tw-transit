@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
     const snapshot = await getRealMetroSystemSnapshot(system);
     return NextResponse.json(snapshot, {
       headers: {
-        'Cache-Control': 'public, s-maxage=15, stale-while-revalidate=30',
+        'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=10',
       },
     });
   }
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
   const detail = await getRealMetroStation(system, station);
   return NextResponse.json(detail, {
     headers: {
-      'Cache-Control': 'public, s-maxage=15, stale-while-revalidate=30',
+      'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=10',
     },
   });
 }

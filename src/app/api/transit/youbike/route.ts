@@ -71,7 +71,7 @@ export async function GET(req: NextRequest) {
         headers: {
           'Cache-Control':
             stations.length > 0
-              ? 'public, s-maxage=30, stale-while-revalidate=60'
+              ? 'public, s-maxage=15, stale-while-revalidate=15'
               : 'no-store, max-age=0',
         },
       }

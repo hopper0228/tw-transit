@@ -705,7 +705,7 @@ export async function getRealYouBikeStations(
     fetchAndTransform<TaipeiYouBikeRaw[], YouBikeStation[]>(
       'tpe-youbike-compact',
       'https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json',
-      30,
+      15,
       false,
       (raw) =>
         raw.map((st) => ({
@@ -726,7 +726,7 @@ export async function getRealYouBikeStations(
     fetchAndTransform<NewTaipeiYouBikeRaw[], YouBikeStation[]>(
       'ntpc-youbike-full',
       'https://data.ntpc.gov.tw/api/datasets/010e5b15-3823-4b20-b401-b1cf000550c5/json?page=0&size=2000',
-      30,
+      15,
       false,
       (raw) =>
         raw.map((st) => {
@@ -1028,7 +1028,7 @@ export async function getRealParkingLots(
     fetchAndTransform<{ data: { park: TcmsvParkAvail[] } }, Map<string, number>>(
       'tpe-parking-avail-map',
       'https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_allavailable.json',
-      30,
+      15,
       false,
       (raw) => {
         const map = new Map<string, number>();

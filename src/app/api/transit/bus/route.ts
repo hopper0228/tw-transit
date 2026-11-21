@@ -7,7 +7,7 @@ import {
 import { fetchTdx, isTdxConfigured } from '@/lib/tdx-client';
 import { BusRouteDetail, BusStopStatus } from '@/lib/types';
 
-const NO_STORE_HEADERS = { 'Cache-Control': 'public, s-maxage=15, stale-while-revalidate=30' };
+const NO_STORE_HEADERS = { 'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=10' };
 
 function parseUserPoint(params: URLSearchParams): GeoPoint | undefined {
   const lat = Number(params.get('lat'));
