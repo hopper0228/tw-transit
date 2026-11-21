@@ -229,15 +229,21 @@ function ParkingPageInner() {
         onRefresh={refreshLocation}
       />
 
-      {/* 距離範圍篩選與搜尋欄 */}
+      {/* 距離範圍篩選與搜尋欄（切換地圖模式時保持版面高度與比例穩定） */}
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          {viewMode === 'list' && coords ? (
-            <div className="flex flex-wrap items-center gap-2">
+          {coords ? (
+            <div
+              className={`flex flex-wrap items-center gap-2 transition-opacity ${
+                viewMode === 'map' ? 'pointer-events-none opacity-45' : ''
+              }`}
+            >
               <span className="text-xs font-semibold text-slate-500">距離範圍：</span>
               {DISTANCE_FILTERS.map((d) => (
                 <button
                   key={d.value}
+                  type="button"
+                  disabled={viewMode === 'map'}
                   onClick={() => setMaxDistance(d.value)}
                   className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
                     maxDistance === d.value
