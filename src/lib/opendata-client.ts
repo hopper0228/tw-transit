@@ -750,23 +750,39 @@ async function getTdxBikeStations(forceRefresh = false): Promise<YouBikeStation[
   return [];
 }
 
-async function syncTdxBikeBatch(batch: 1 | 2): Promise<number> {
-  if (!isTdxConfigured()) return 0;
+async function syncTdxBikeBatch(batch: 1 | 2): Promise<{
+  total: number;
+  counts: Record<string, number>;
+}> {
+  if (!isTdxConfigured()) return { total: 0, counts: {} };
   const cities = batch === 1 ? TDX_POI_BATCH_1 : TDX_POI_BATCH_2;
-  const out: YouBikeStation[] = [];
+  const dateStr = getTaipeiDateStr();
+  const prevList = isDbConfigured()
+    ? (await getRailSnapshotFromDb<YouBikeStation[]>(`youbike:tdx:b${batch}`, dateStr)) || []
+    : [];
+
+  const counts: Record<string, number> = {};
+  const byCity = new Map<string, YouBikeStation[]>();
+  for (const item of prevList) {
+    const arr = byCity.get(item.city) || [];
+    arr.push(item);
+    byCity.set(item.city, arr);
+  }
+
   for (let i = 0; i < cities.length; i++) {
     const c = cities[i];
-    if (i > 0) await new Promise((r) => setTimeout(r, 1100));
+    if (i > 0) await new Promise((r) => setTimeout(r, 1500));
     const raw = await fetchTdx<TdxBikeStationRaw[]>(
       `/v2/Bike/Station/City/${c.code}?%24format=JSON`,
       0
     ).catch(() => [] as TdxBikeStationRaw[]);
 
+    const cityOut: YouBikeStation[] = [];
     for (const st of Array.isArray(raw) ? raw : []) {
       const lat = Number(st.StationPosition?.PositionLat);
       const lng = Number(st.StationPosition?.PositionLon);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      out.push({
+      cityOut.push({
         stationUid: st.StationUID,
         stationName: (st.StationName?.Zh_tw || st.StationUID).replace(/^YouBike2\.0_/, ''),
         city: c.code,
@@ -781,19 +797,26 @@ async function syncTdxBikeBatch(batch: 1 | 2): Promise<number> {
         updatedAt: '靜態站點',
       });
     }
+    if (cityOut.length > 0) {
+      byCity.set(c.code, cityOut);
+      counts[c.code] = cityOut.length;
+    } else {
+      counts[c.code] = byCity.get(c.code)?.length || 0;
+    }
   }
 
+  const out = Array.from(byCity.values()).flat();
   cache.delete('tdx-youbike-static');
   if (out.length > 0 && isDbConfigured()) {
     await saveRailSnapshotToDb(
       `youbike:tdx:b${batch}`,
       `youbike_tdx_b${batch}`,
-      getTaipeiDateStr(),
+      dateStr,
       out,
       out.length
     );
   }
-  return out.length;
+  return { total: out.length, counts };
 }
 
 async function enrichTdxBikeAvailability(
@@ -1193,23 +1216,39 @@ async function getTdxParkingLots(forceRefresh = false): Promise<ParkingLot[]> {
   return [];
 }
 
-async function syncTdxParkingBatch(batch: 1 | 2): Promise<number> {
-  if (!isTdxConfigured()) return 0;
+async function syncTdxParkingBatch(batch: 1 | 2): Promise<{
+  total: number;
+  counts: Record<string, number>;
+}> {
+  if (!isTdxConfigured()) return { total: 0, counts: {} };
   const cities = batch === 1 ? TDX_POI_BATCH_1 : TDX_POI_BATCH_2;
-  const out: ParkingLot[] = [];
+  const dateStr = getTaipeiDateStr();
+  const prevList = isDbConfigured()
+    ? (await getRailSnapshotFromDb<ParkingLot[]>(`parking:tdx:b${batch}`, dateStr)) || []
+    : [];
+
+  const counts: Record<string, number> = {};
+  const byCity = new Map<string, ParkingLot[]>();
+  for (const item of prevList) {
+    const arr = byCity.get(item.city) || [];
+    arr.push(item);
+    byCity.set(item.city, arr);
+  }
+
   for (let i = 0; i < cities.length; i++) {
     const c = cities[i];
-    if (i > 0) await new Promise((r) => setTimeout(r, 1100));
+    if (i > 0) await new Promise((r) => setTimeout(r, 1500));
     const raw = await fetchTdx<TdxCarParkRaw[] | { CarParks?: TdxCarParkRaw[] }>(
       `/v1/Parking/OffStreet/CarPark/City/${c.code}?%24format=JSON`,
       0
     ).catch(() => [] as TdxCarParkRaw[]);
     const list = Array.isArray(raw) ? raw : raw?.CarParks || [];
+    const cityOut: ParkingLot[] = [];
     for (const p of list) {
       const lat = Number(p.CarParkPosition?.PositionLat);
       const lng = Number(p.CarParkPosition?.PositionLon);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      out.push({
+      cityOut.push({
         carParkId: `TDX-${c.code}-${p.CarParkID}`,
         name: p.CarParkName?.Zh_tw || p.CarParkID,
         city: c.code,
@@ -1223,41 +1262,58 @@ async function syncTdxParkingBatch(batch: 1 | 2): Promise<number> {
         updatedAt: '費率與格位',
       });
     }
+    if (cityOut.length > 0) {
+      byCity.set(c.code, cityOut);
+      counts[c.code] = cityOut.length;
+    } else {
+      counts[c.code] = byCity.get(c.code)?.length || 0;
+    }
   }
 
+  const out = Array.from(byCity.values()).flat();
   cache.delete('tdx-parking-static');
   if (out.length > 0 && isDbConfigured()) {
     await saveRailSnapshotToDb(
       `parking:tdx:b${batch}`,
       `parking_tdx_b${batch}`,
-      getTaipeiDateStr(),
+      dateStr,
       out,
       out.length
     );
   }
-  return out.length;
+  return { total: out.length, counts };
 }
 
 export async function syncTdxBikeStaticToDb(batch?: 1 | 2): Promise<{
   tdxBikeStations: number;
+  tdxBikeCounts?: Record<string, number>;
 }> {
   if (batch === 1 || batch === 2) {
-    return { tdxBikeStations: await syncTdxBikeBatch(batch) };
+    const r = await syncTdxBikeBatch(batch);
+    return { tdxBikeStations: r.total, tdxBikeCounts: r.counts };
   }
-  const b1 = await syncTdxBikeBatch(1);
-  const b2 = await syncTdxBikeBatch(2);
-  return { tdxBikeStations: b1 + b2 };
+  const r1 = await syncTdxBikeBatch(1);
+  const r2 = await syncTdxBikeBatch(2);
+  return {
+    tdxBikeStations: r1.total + r2.total,
+    tdxBikeCounts: { ...r1.counts, ...r2.counts },
+  };
 }
 
 export async function syncTdxParkingStaticToDb(batch?: 1 | 2): Promise<{
   tdxParking: number;
+  tdxParkingCounts?: Record<string, number>;
 }> {
   if (batch === 1 || batch === 2) {
-    return { tdxParking: await syncTdxParkingBatch(batch) };
+    const r = await syncTdxParkingBatch(batch);
+    return { tdxParking: r.total, tdxParkingCounts: r.counts };
   }
-  const b1 = await syncTdxParkingBatch(1);
-  const b2 = await syncTdxParkingBatch(2);
-  return { tdxParking: b1 + b2 };
+  const r1 = await syncTdxParkingBatch(1);
+  const r2 = await syncTdxParkingBatch(2);
+  return {
+    tdxParking: r1.total + r2.total,
+    tdxParkingCounts: { ...r1.counts, ...r2.counts },
+  };
 }
 
 export async function syncTdxPoiStaticToDb(): Promise<{
