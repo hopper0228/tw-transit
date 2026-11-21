@@ -55,7 +55,9 @@ const MAX_CACHE_ENTRIES = 30;
 
 const TransitStoreContext = createContext<TransitStoreContextValue | null>(null);
 
-function resolveGroupFromKey(key: string): { slot: string; group: ActiveGroup } {
+function resolveGroupFromKey(key: string): { slot: string; group: ActiveGroup } | null {
+  if (key.startsWith('tra:train:') || key.startsWith('tra:trains:')) return null;
+  if (key.startsWith('thsr:train:') || key.startsWith('thsr:trains:')) return null;
   if (key.startsWith('metro:')) return { slot: 'metro', group: 'metro' };
   if (key.startsWith('tra:')) return { slot: 'tra', group: 'tra' };
   if (key.startsWith('thsr:')) return { slot: 'thsr', group: 'thsr' };
@@ -182,8 +184,14 @@ export function TransitStoreProvider({
     ): Promise<T> => {
       hydrateFromSession();
 
-      const { slot, group } = resolveGroupFromKey(key);
-      activeTargetsRef.current.set(slot, { key, url, group });
+      const resolved = resolveGroupFromKey(key);
+      if (resolved) {
+        activeTargetsRef.current.set(resolved.slot, {
+          key,
+          url,
+          group: resolved.group,
+        });
+      }
 
       if (!options?.force) {
         const existing = cacheRef.current.get(key);

@@ -19,9 +19,9 @@ interface AutoRefreshBadgeProps {
 
 export default function AutoRefreshBadge({
   intervalSeconds = 30,
+  onRefresh,
   onManualRefresh,
   isRefreshing,
-  lastUpdated,
 }: AutoRefreshBadgeProps) {
   const { syncCountdown, isSyncing, triggerFrontendRefresh } =
     useTransitStore();
@@ -50,8 +50,12 @@ export default function AutoRefreshBadge({
     } else {
       triggerFrontendRefresh();
     }
-    setJustUpdated(true);
-    setTimeout(() => setJustUpdated(false), 1800);
+    if (onRefresh) {
+      onRefresh();
+    } else {
+      setJustUpdated(true);
+      setTimeout(() => setJustUpdated(false), 1800);
+    }
   };
 
   const progressPct = Math.min(
@@ -63,7 +67,7 @@ export default function AutoRefreshBadge({
     <button
       type="button"
       onClick={handleManualClick}
-      title="點擊立即重算前端最新時間與狀態（不重打後端 API；全站每 30 秒統一背景同步）"
+      title="點擊立即同步後端最新資料並重算時間；全站每 30 秒自動背景同步"
       className={`group relative overflow-hidden rounded-lg border px-3 py-2 text-xs font-medium transition-colors duration-150 ${
         justUpdated
           ? 'border-emerald-600/25 bg-emerald-50 text-emerald-700 dark:border-emerald-400/25 dark:bg-emerald-950/40 dark:text-emerald-300'
